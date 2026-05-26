@@ -40,9 +40,12 @@ func main() {
 	)
 	flag.StringVar(&gatewayName, "gateway", "", "name of the Gateway this refresher serves")
 	flag.StringVar(&gatewayNS, "namespace", "", "namespace of the Gateway this refresher serves")
-	flag.StringVar(&configPath, "config", "/etc/onionbalance/config.yaml", "path to write the rendered onionbalance config")
-	flag.StringVar(&pidPath, "pidfile", "/run/onionbalance/onionbalance.pid", "pidfile of the onionbalance daemon to SIGHUP")
-	flag.DurationVar(&interval, "interval", 30*time.Second, "minimum interval between rewrites")
+	flag.StringVar(&configPath, "config", "/etc/onionbalance/config.yaml",
+		"path to write the rendered onionbalance config")
+	flag.StringVar(&pidPath, "pidfile", "/run/onionbalance/onionbalance.pid",
+		"pidfile of the onionbalance daemon to SIGHUP")
+	flag.DurationVar(&interval, "interval", 30*time.Second,
+		"minimum interval between rewrites")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
