@@ -1,0 +1,293 @@
+/*
+Copyright 2026 Alexis Lowe.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+*/
+
+package controller
+
+import (
+	"crypto/rand"
+	"slices"
+	"strings"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
+	"github.com/chimbosonic/tor-gateway/internal/tor"
+)
+
+// testScheme returns a runtime.Scheme with every type the builders need
+// for SetControllerReference to find the Gateway kind.
+func testScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	s := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(s))
+	utilruntime.Must(gwv1.Install(s))
+	utilruntime.Must(policyv1alpha1.AddToScheme(s))
+	return s
+}
+
+func sampleGateway() *gwv1.Gateway {
+	return &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "blog",
+			Namespace: "prod",
+			UID:       "11111111-2222-3333-4444-555555555555",
+		},
+		Spec: gwv1.GatewaySpec{
+			GatewayClassName: "tor-gateway",
+			Listeners: []gwv1.Listener{{
+				Name:     "onion",
+				Port:     80,
+				Protocol: HiddenServiceProtocol,
+			}},
+		},
+	}
+}
+
+func sampleImages() RuntimeImages {
+	return RuntimeImages{
+		Tor:      "ghcr.io/chimbosonic/tor:0.4.8",
+		Router:   "ghcr.io/chimbosonic/tor-gateway-router:dev",
+		TorInit:  "ghcr.io/chimbosonic/tor-gateway-tor-init:dev",
+		Operator: "ghcr.io/chimbosonic/tor-gateway-manager:dev",
+	}
+}
+
+// --- BuildKeySecret ---
+
+func TestBuildKeySecret_HasExpectedDataAndOwner(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	kp, err := tor.GenerateKeyPair(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secret, err := BuildKeySecret(gw, kp, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secret.Name != "blog-keys" || secret.Namespace != "prod" {
+		t.Fatalf("wrong meta: %s/%s", secret.Namespace, secret.Name)
+	}
+	if got := secret.Type; got != corev1.SecretTypeOpaque {
+		t.Fatalf("type = %s, want Opaque", got)
+	}
+	for _, key := range []string{tor.FileSecretKeyName, tor.FilePublicKeyName, tor.FileHostnameName} {
+		if _, ok := secret.Data[key]; !ok {
+			t.Fatalf("Secret missing data[%q]", key)
+		}
+	}
+	if len(secret.OwnerReferences) != 1 {
+		t.Fatalf("expected 1 OwnerReference, got %d", len(secret.OwnerReferences))
+	}
+	if secret.OwnerReferences[0].UID != gw.UID {
+		t.Fatalf("owner UID = %s, want %s", secret.OwnerReferences[0].UID, gw.UID)
+	}
+	if !*secret.OwnerReferences[0].Controller {
+		t.Fatal("owner reference should be controller=true")
+	}
+	if got := string(secret.Data[tor.FileHostnameName]); !strings.HasSuffix(strings.TrimSpace(got), ".onion") {
+		t.Fatalf("hostname does not end with .onion: %q", got)
+	}
+}
+
+// --- BuildTorrcConfigMap ---
+
+func TestBuildTorrcConfigMap_UsesPolicyValues(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+
+	cm, err := BuildTorrcConfigMap(gw, EffectiveServicePolicy{
+		LogLevel:           "debug",
+		PoWDefensesEnabled: false,
+	}, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.Name != "blog-torrc" || cm.Namespace != "prod" {
+		t.Fatalf("wrong meta: %s/%s", cm.Namespace, cm.Name)
+	}
+	torrc := cm.Data["torrc"]
+	if !strings.Contains(torrc, "Log debug stdout") {
+		t.Fatalf("policy LogLevel not propagated: %q", torrc)
+	}
+	if strings.Contains(torrc, "HiddenServicePoWDefensesEnabled 1") {
+		t.Fatalf("PoW directives should be absent when policy.PoWDefensesEnabled=false; got %q", torrc)
+	}
+	if len(cm.OwnerReferences) != 1 {
+		t.Fatal("expected OwnerReference")
+	}
+}
+
+func TestBuildTorrcConfigMap_DefaultPolicyEnablesPoW(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	cm, err := BuildTorrcConfigMap(gw, DefaultPolicy(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	torrc := cm.Data["torrc"]
+	if !strings.Contains(torrc, "HiddenServicePoWDefensesEnabled 1") {
+		t.Fatalf("default policy should enable PoW defenses; got %q", torrc)
+	}
+	if !strings.Contains(torrc, "Log notice stdout") {
+		t.Fatalf("default log level should be notice; got %q", torrc)
+	}
+}
+
+// --- BuildDeployment ---
+
+func TestBuildDeployment_ContainersAndHardening(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	dep, err := BuildDeployment(gw, DefaultPolicy(), sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := dep.Spec.Template.Spec
+	if len(tpl.InitContainers) != 1 || tpl.InitContainers[0].Name != initContainerName {
+		t.Fatalf("expected init container %q, got %+v", initContainerName, tpl.InitContainers)
+	}
+	names := make([]string, 0, len(tpl.Containers))
+	for _, c := range tpl.Containers {
+		names = append(names, c.Name)
+	}
+	if !slices.Contains(names, torContainerName) || !slices.Contains(names, routerContainer) {
+		t.Fatalf("missing expected containers; got %v", names)
+	}
+
+	for _, c := range append(tpl.InitContainers, tpl.Containers...) {
+		if c.SecurityContext == nil ||
+			c.SecurityContext.AllowPrivilegeEscalation == nil ||
+			*c.SecurityContext.AllowPrivilegeEscalation {
+			t.Fatalf("container %s does not deny privilege escalation", c.Name)
+		}
+		if c.SecurityContext.ReadOnlyRootFilesystem == nil || !*c.SecurityContext.ReadOnlyRootFilesystem {
+			t.Fatalf("container %s root FS not read-only", c.Name)
+		}
+		if c.SecurityContext.Capabilities == nil ||
+			!hasCap(c.SecurityContext.Capabilities.Drop, "ALL") {
+			t.Fatalf("container %s does not drop ALL caps", c.Name)
+		}
+	}
+
+	if tpl.SecurityContext == nil ||
+		tpl.SecurityContext.SeccompProfile == nil ||
+		tpl.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Fatal("pod must use RuntimeDefault seccomp profile")
+	}
+}
+
+func TestBuildDeployment_VolumeWiring(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	dep, err := BuildDeployment(gw, DefaultPolicy(), sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := dep.Spec.Template.Spec
+
+	var keysVol, configVol *corev1.Volume
+	for i := range tpl.Volumes {
+		v := &tpl.Volumes[i]
+		switch v.Name {
+		case keysVolumeName:
+			keysVol = v
+		case configVolumeName:
+			configVol = v
+		}
+	}
+	if keysVol == nil || keysVol.Secret == nil {
+		t.Fatal("keys volume is not backed by a Secret")
+	}
+	if keysVol.Secret.SecretName != "blog-keys" {
+		t.Fatalf("keys Secret name = %q, want blog-keys", keysVol.Secret.SecretName)
+	}
+	if keysVol.Secret.DefaultMode == nil || *keysVol.Secret.DefaultMode != 0o600 {
+		t.Fatal("keys Secret defaultMode must be 0600")
+	}
+	if configVol == nil || configVol.ConfigMap == nil {
+		t.Fatal("config volume is not backed by a ConfigMap")
+	}
+	if configVol.ConfigMap.Name != "blog-torrc" {
+		t.Fatalf("torrc ConfigMap name = %q, want blog-torrc", configVol.ConfigMap.Name)
+	}
+}
+
+func TestBuildDeployment_RequiresImages(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	if _, err := BuildDeployment(gw, DefaultPolicy(), RuntimeImages{Router: "x", TorInit: "y"}, scheme); err == nil {
+		t.Fatal("expected error with missing Tor image")
+	}
+}
+
+// --- BuildService ---
+
+func TestBuildService_HeadlessWithRouterPort(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	svc, err := BuildService(gw, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.Spec.ClusterIP != corev1.ClusterIPNone {
+		t.Fatalf("Service should be headless; got ClusterIP=%q", svc.Spec.ClusterIP)
+	}
+	if len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Port != int32(loopbackTargetPort) {
+		t.Fatalf("Service ports = %+v", svc.Spec.Ports)
+	}
+}
+
+// --- FromTorServicePolicy ---
+
+func TestFromTorServicePolicy_AppliesDefaults(t *testing.T) {
+	eff := FromTorServicePolicy(nil)
+	if eff.LogLevel != "notice" {
+		t.Fatalf("nil policy LogLevel = %q, want notice", eff.LogLevel)
+	}
+	if !eff.PoWDefensesEnabled {
+		t.Fatal("nil policy must enable PoW defenses")
+	}
+	if eff.VanityPrefix != "" {
+		t.Fatalf("nil policy VanityPrefix = %q, want empty", eff.VanityPrefix)
+	}
+}
+
+func TestFromTorServicePolicy_RespectsSpec(t *testing.T) {
+	disabled := false
+	p := &policyv1alpha1.TorServicePolicy{
+		Spec: policyv1alpha1.TorServicePolicySpec{
+			LogLevel:           "debug",
+			PoWDefensesEnabled: &disabled,
+			VanityPrefix:       "foo",
+		},
+	}
+	eff := FromTorServicePolicy(p)
+	if eff.LogLevel != "debug" {
+		t.Fatalf("LogLevel = %q", eff.LogLevel)
+	}
+	if eff.PoWDefensesEnabled {
+		t.Fatal("PoWDefensesEnabled must follow spec=false")
+	}
+	if eff.VanityPrefix != "foo" {
+		t.Fatalf("VanityPrefix = %q", eff.VanityPrefix)
+	}
+}
+
+func hasCap(list []corev1.Capability, want corev1.Capability) bool {
+	return slices.Contains(list, want)
+}

@@ -19,7 +19,9 @@ package controller
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
@@ -62,12 +65,17 @@ var _ = BeforeSuite(func() {
 	var err error
 	err = policyv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
+	err = gwv1.Install(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths: []string{
+			filepath.Join("..", "..", "config", "crd", "bases"),
+			gatewayAPICRDDir(),
+		},
 		ErrorIfCRDPathMissing: true,
 	}
 
@@ -93,6 +101,20 @@ var _ = AfterSuite(func() {
 		return testEnv.Stop()
 	}, time.Minute, time.Second).Should(Succeed())
 })
+
+// gatewayAPICRDDir returns the directory holding the gateway-api standard
+// channel CRD YAMLs for the version vendored into go.mod. We pull them
+// straight out of the Go module cache so the tests stay in lockstep with
+// the gateway-api types we compile against.
+func gatewayAPICRDDir() string {
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "sigs.k8s.io/gateway-api").Output()
+	if err != nil {
+		// Surfacing via panic here is fine: envtest startup is the only
+		// caller, and it will report a clear error before the suite runs.
+		panic("locate sigs.k8s.io/gateway-api module dir: " + err.Error())
+	}
+	return filepath.Join(strings.TrimSpace(string(out)), "config", "crd", "standard")
+}
 
 // getFirstFoundEnvTestBinaryDir locates the first binary in the specified path.
 // ENVTEST-based tests depend on specific binaries, usually located in paths set by

@@ -5,11 +5,56 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  - services
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - gatewayclasses
+  - gateways
+  - httproutes
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - gatewayclasses/status
+  - gateways/status
+  - httproutes/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - policy.torgateway.io
   resources:
   - onionbalancepolicies
   - torclientauthpolicies
-  - torservicepolicies
   verbs:
   - create
   - delete
@@ -23,7 +68,6 @@ rules:
   resources:
   - onionbalancepolicies/finalizers
   - torclientauthpolicies/finalizers
-  - torservicepolicies/finalizers
   verbs:
   - update
 - apiGroups:
@@ -36,3 +80,13 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - policy.torgateway.io
+  resources:
+  - torservicepolicies
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch

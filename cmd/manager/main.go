@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
 	"github.com/chimbosonic/tor-gateway/internal/controller"
@@ -49,6 +50,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(policyv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(gwv1.Install(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -79,6 +81,17 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+
+	// Runtime images injected into per-Gateway pods. Defaults are placeholders;
+	// the Helm chart wires these to the published images.
+	var torImage, routerImage, initImage string
+	flag.StringVar(&torImage, "tor-image", "ghcr.io/chimbosonic/tor:0.4.8-latest",
+		"container image of the tor daemon injected into per-Gateway pods")
+	flag.StringVar(&routerImage, "router-image", "ghcr.io/chimbosonic/tor-gateway-router:dev",
+		"container image of the in-pod HTTP router sidecar")
+	flag.StringVar(&initImage, "tor-init-image", "ghcr.io/chimbosonic/tor-gateway-tor-init:dev",
+		"container image of the tor-init init container that prepares HiddenServiceDir")
+
 	opts := zap.Options{
 		Development: true,
 	}
@@ -178,6 +191,32 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.GatewayClassReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "gatewayclass")
+		os.Exit(1)
+	}
+	if err := (&controller.GatewayReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Images: controller.RuntimeImages{
+			Tor:     torImage,
+			Router:  routerImage,
+			TorInit: initImage,
+		},
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "gateway")
+		os.Exit(1)
+	}
+	if err := (&controller.HTTPRouteReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "httproute")
+		os.Exit(1)
+	}
 	if err := (&controller.TorServicePolicyReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
