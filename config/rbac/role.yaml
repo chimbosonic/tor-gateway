@@ -1,0 +1,38 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - policy.torgateway.io
+  resources:
+  - onionbalancepolicies
+  - torclientauthpolicies
+  - torservicepolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - policy.torgateway.io
+  resources:
+  - onionbalancepolicies/finalizers
+  - torclientauthpolicies/finalizers
+  - torservicepolicies/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - policy.torgateway.io
+  resources:
+  - onionbalancepolicies/status
+  - torclientauthpolicies/status
+  - torservicepolicies/status
+  verbs:
+  - get
+  - patch
+  - update

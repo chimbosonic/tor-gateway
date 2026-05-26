@@ -1,0 +1,90 @@
+# Default values for tor-gateway. See README.md for full documentation.
+
+# Whether to install the operator's Policy CRDs (TorServicePolicy etc.).
+# Set to false if you manage CRDs out-of-band (e.g. via a separate ArgoCD app
+# of files generated from `make manifests`).
+crds:
+  install: true
+
+manager:
+  image:
+    repository: ghcr.io/chimbosonic/tor-gateway-manager
+    tag: ""  # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+    # If you adopt cosign keyless signing, document expected digest pinning here.
+  replicas: 1
+  # Single-binary controller with manager-side leader election.
+  leaderElection:
+    enabled: true
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+  # SecurityContext defaults are deliberately strict; override at your own risk.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65532
+    capabilities:
+      drop: ["ALL"]
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  metrics:
+    enabled: true
+    port: 8443
+    secure: true   # bind on https with auth-delegated client TLS
+  health:
+    port: 8081
+  logLevel: info
+
+# Image references the controller will inject into Tor pods it creates.
+# Pinned digests recommended for production; tags here only for convenience.
+torRuntime:
+  routerImage:
+    repository: ghcr.io/chimbosonic/tor-gateway-router
+    tag: ""
+    pullPolicy: IfNotPresent
+  obrefreshImage:
+    repository: ghcr.io/chimbosonic/tor-gateway-obrefresh
+    tag: ""
+    pullPolicy: IfNotPresent
+  torImage:
+    repository: ghcr.io/chimbosonic/tor
+    tag: "0.4.8-latest"
+    pullPolicy: IfNotPresent
+  onionbalanceImage:
+    repository: ghcr.io/chimbosonic/onionbalance
+    tag: "0.2-latest"
+    pullPolicy: IfNotPresent
+
+# GatewayClass managed by this operator. Set install=false if you want to
+# create the GatewayClass yourself (e.g. for multi-class deployments).
+gatewayClass:
+  install: true
+  name: tor-gateway
+  controllerName: torgateway.io/gateway-controller
+
+# Network policy emitted around the manager itself.
+managerNetworkPolicy:
+  enabled: true
+
+# Service account, RBAC, and pod security toggles.
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+rbac:
+  create: true
+
+# Pod-level extras (annotations, labels, priority class).
+podAnnotations: {}
+podLabels: {}
+priorityClassName: ""

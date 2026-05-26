@@ -1,0 +1,6 @@
+## Append samples of your project ##
+resources:
+- policy_v1alpha1_torservicepolicy.yaml
+- policy_v1alpha1_torclientauthpolicy.yaml
+- policy_v1alpha1_onionbalancepolicy.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

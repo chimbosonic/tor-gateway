@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tor-gateway.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "tor-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.manager.replicas }}
+  selector:
+    matchLabels: {{- include "tor-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "tor-gateway.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "tor-gateway.serviceAccountName" . }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext: {{- toYaml .Values.manager.podSecurityContext | nindent 8 }}
+      containers:
+        - name: manager
+          image: {{ include "tor-gateway.managerImage" . }}
+          imagePullPolicy: {{ .Values.manager.image.pullPolicy }}
+          args:
+            - --leader-elect={{ .Values.manager.leaderElection.enabled }}
+            - --health-probe-bind-address=:{{ .Values.manager.health.port }}
+            - --metrics-bind-address={{ if .Values.manager.metrics.enabled }}:{{ .Values.manager.metrics.port }}{{ else }}0{{ end }}
+            - --metrics-secure={{ .Values.manager.metrics.secure }}
+            - --zap-log-level={{ .Values.manager.logLevel }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.manager.health.port }}
+            {{- if .Values.manager.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.manager.metrics.port }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{- toYaml .Values.manager.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.manager.containerSecurityContext | nindent 12 }}
+      {{- with .Values.manager.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.manager.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.manager.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,32 @@
+{{- if .Values.managerNetworkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "tor-gateway.fullname" . }}-manager
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "tor-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "tor-gateway.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - port: {{ .Values.manager.health.port }}
+        {{- if .Values.manager.metrics.enabled }}
+        - port: {{ .Values.manager.metrics.port }}
+        {{- end }}
+  egress:
+    # Kube apiserver (any port; restrict further when running with a known
+    # apiserver Service object). DNS for service discovery.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}

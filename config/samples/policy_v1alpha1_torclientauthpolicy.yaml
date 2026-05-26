@@ -1,0 +1,9 @@
+apiVersion: policy.torgateway.io/v1alpha1
+kind: TorClientAuthPolicy
+metadata:
+  labels:
+    app.kubernetes.io/name: tor-gateway
+    app.kubernetes.io/managed-by: kustomize
+  name: torclientauthpolicy-sample
+spec:
+  # TODO(user): Add fields here

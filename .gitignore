@@ -1,0 +1,43 @@
+# Binaries
+bin/
+*.exe
+*.test
+*.out
+cover.out
+coverage.txt
+
+# Go
+vendor/
+go.work
+go.work.sum
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+*.tar.gz
+*.tgz
+
+# Helm
+charts/*/charts/
+charts/*.tgz
+
+# Kubernetes
+*.kubeconfig
+kubeconfig
+
+# Local env
+.envrc
+.env
+.env.local
+
+# Generated docs / SBOM / signatures kept under release/
+release/

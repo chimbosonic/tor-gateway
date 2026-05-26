@@ -1,0 +1,24 @@
+apiVersion: v2
+name: tor-gateway
+description: |
+  Kubernetes Gateway API conformant operator that exposes in-cluster Services
+  as Tor v3 hidden services (.onion URLs).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">= 1.30.0-0"
+home: https://github.com/chimbosonic/tor-gateway
+sources:
+  - https://github.com/chimbosonic/tor-gateway
+keywords:
+  - tor
+  - onion
+  - gateway-api
+  - privacy
+  - hidden-service
+maintainers:
+  - name: chimbosonic
+    email: agl314@chimbosonic.com
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/category: networking
