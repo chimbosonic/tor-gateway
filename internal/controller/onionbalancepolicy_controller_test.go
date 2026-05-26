@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -51,7 +52,17 @@ var _ = Describe("OnionBalancePolicy Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: policyv1alpha1.OnionBalancePolicySpec{
+						TargetRefs: []gwv1.LocalPolicyTargetReference{{
+							Group: "gateway.networking.k8s.io",
+							Kind:  "Gateway",
+							Name:  "test-gateway",
+						}},
+						Replicas: 3,
+						MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{
+							Name: "master-key",
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

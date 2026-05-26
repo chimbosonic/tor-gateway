@@ -18,69 +18,106 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// ClientAuthMode controls how the Tor service treats requests from clients
+// that did not present an authorized x25519 keypair.
+// +kubebuilder:validation:Enum=Strict;Audit
+type ClientAuthMode string
 
-// TorClientAuthPolicySpec defines the desired state of TorClientAuthPolicy
-type TorClientAuthPolicySpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
+const (
+	// ClientAuthModeStrict rejects unauthorized clients at the Tor descriptor
+	// layer. This is the default and the secure choice.
+	ClientAuthModeStrict ClientAuthMode = "Strict"
 
-	// foo is an example field of TorClientAuthPolicy. Edit torclientauthpolicy_types.go to remove/update
+	// ClientAuthModeAudit accepts unauthorized clients but emits an event
+	// so the operator can preview the change before flipping to Strict.
+	// Useful during a roll-out; not for production.
+	ClientAuthModeAudit ClientAuthMode = "Audit"
+)
+
+// ClientsSecretRef references a Secret holding authorized client x25519
+// public keys. Each entry in Secret.Data is interpreted as one client's
+// base32-encoded x25519 public key (the part after "descriptor:x25519:" in
+// the standard Tor .auth format). The map key becomes the on-disk filename
+// (<key>.auth) and the client's logical label.
+//
+// Cross-namespace references require a ReferenceGrant in the Secret's
+// namespace authorizing this policy.
+type ClientsSecretRef struct {
+	// Name of the Secret.
+	//
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +required
+	Name string `json:"name"`
+
+	// Namespace of the Secret. Defaults to the policy's namespace.
+	//
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
 }
 
-// TorClientAuthPolicyStatus defines the observed state of TorClientAuthPolicy.
-type TorClientAuthPolicyStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the TorClientAuthPolicy resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
+// TorClientAuthPolicySpec configures v3 client authorization for a Gateway.
+// This is a Direct Policy (GEP-2648).
+type TorClientAuthPolicySpec struct {
+	// TargetRefs is the list of Gateways this policy applies to. Must
+	// reference gateway.networking.k8s.io/v1 Gateways.
 	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:XValidation:rule="self.all(r, r.group == 'gateway.networking.k8s.io' && r.kind == 'Gateway')",message="targetRefs must reference gateway.networking.k8s.io/Gateway"
+	// +required
+	TargetRefs []gwv1.LocalPolicyTargetReference `json:"targetRefs"`
+
+	// ClientsSecretRef points at the Secret containing authorized client
+	// x25519 public keys.
 	//
-	// The status of each condition is one of True, False, or Unknown.
-	// +listType=map
-	// +listMapKey=type
+	// +required
+	ClientsSecretRef ClientsSecretRef `json:"clientsSecretRef"`
+
+	// Mode controls behavior for unauthorized clients. Defaults to Strict.
+	//
+	// +kubebuilder:default=Strict
 	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	Mode ClientAuthMode `json:"mode,omitempty"`
+}
+
+// TorClientAuthPolicyStatus reflects acceptance per ancestor Gateway.
+type TorClientAuthPolicyStatus struct {
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=16
+	// +optional
+	Ancestors []gwv1.PolicyAncestorStatus `json:"ancestors,omitempty"`
 }
 
 // +kubebuilder:object:root=true
+// +kubebuilder:resource:categories={gateway-api,tor-gateway},shortName=tcap
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Targets",type=string,JSONPath=`.spec.targetRefs[*].name`
+// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.mode`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// TorClientAuthPolicy is the Schema for the torclientauthpolicies API
+// TorClientAuthPolicy enables Tor v3 client authorization on one or more
+// Gateways. Only clients holding a matching x25519 private key can resolve
+// the .onion descriptor.
 type TorClientAuthPolicy struct {
 	metav1.TypeMeta `json:",inline"`
 
-	// metadata is a standard object metadata
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	// spec defines the desired state of TorClientAuthPolicy
 	// +required
 	Spec TorClientAuthPolicySpec `json:"spec"`
 
-	// status defines the observed state of TorClientAuthPolicy
 	// +optional
 	Status TorClientAuthPolicyStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
 
-// TorClientAuthPolicyList contains a list of TorClientAuthPolicy
+// TorClientAuthPolicyList contains a list of TorClientAuthPolicy.
 type TorClientAuthPolicyList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`

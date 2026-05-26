@@ -17,70 +17,125 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// MasterKeySecretRef references the Secret holding the onionbalance frontend
+// master ed25519 key. The operator NEVER auto-generates this Secret because
+// losing the master key permanently invalidates the public .onion address.
+// The user is expected to bootstrap it once (via mkp224o or `tor`-genkey).
+type MasterKeySecretRef struct {
+	// Name of the Secret.
+	//
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +required
+	Name string `json:"name"`
 
-// OnionBalancePolicySpec defines the desired state of OnionBalancePolicy
-type OnionBalancePolicySpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of OnionBalancePolicy. Edit onionbalancepolicy_types.go to remove/update
+	// Namespace of the Secret. Defaults to the policy's namespace.
+	// Cross-namespace requires a ReferenceGrant.
+	//
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
 }
 
-// OnionBalancePolicyStatus defines the observed state of OnionBalancePolicy.
-type OnionBalancePolicyStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the OnionBalancePolicy resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
+// OnionBalancePolicySpec configures HA via the onionbalance daemon for a
+// Gateway. Direct Policy (GEP-2648): each backend instance gets its own
+// ed25519 key and acts as an introduction-point provider behind the master
+// .onion address.
+type OnionBalancePolicySpec struct {
+	// TargetRefs is the list of Gateways this policy applies to. Must
+	// reference gateway.networking.k8s.io/v1 Gateways.
 	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:XValidation:rule="self.all(r, r.group == 'gateway.networking.k8s.io' && r.kind == 'Gateway')",message="targetRefs must reference gateway.networking.k8s.io/Gateway"
+	// +required
+	TargetRefs []gwv1.LocalPolicyTargetReference `json:"targetRefs"`
+
+	// Replicas is the number of backend Tor instances that publish
+	// introduction points behind the master onion address. Bounded by the
+	// onionbalance descriptor size limit (12 backends in v3).
 	//
-	// The status of each condition is one of True, False, or Unknown.
-	// +listType=map
-	// +listMapKey=type
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=12
+	// +kubebuilder:default=3
+	// +required
+	Replicas int32 `json:"replicas"`
+
+	// RefreshInterval is the minimum interval between onionbalance config
+	// rewrites in the frontend pod when backend instances change.
+	//
+	// +kubebuilder:default="30s"
 	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	RefreshInterval metav1.Duration `json:"refreshInterval,omitempty"`
+
+	// MasterKeySecretRef references the Secret holding the master ed25519
+	// key for the frontend onionbalance daemon. Required. The Secret MUST
+	// contain `hs_ed25519_secret_key` and `hs_ed25519_public_key` keys.
+	//
+	// +required
+	MasterKeySecretRef MasterKeySecretRef `json:"masterKeySecretRef"`
+
+	// BackendResources is the resource request/limit applied to each
+	// backend Tor pod.
+	//
+	// +optional
+	BackendResources *corev1.ResourceRequirements `json:"backendResources,omitempty"`
+
+	// FrontendResources is the resource request/limit applied to the
+	// onionbalance frontend pod.
+	//
+	// +optional
+	FrontendResources *corev1.ResourceRequirements `json:"frontendResources,omitempty"`
+}
+
+// OnionBalancePolicyStatus reflects acceptance per ancestor Gateway and
+// surfaces the current backend-readiness count for ease of operations.
+type OnionBalancePolicyStatus struct {
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=16
+	// +optional
+	Ancestors []gwv1.PolicyAncestorStatus `json:"ancestors,omitempty"`
+
+	// ReadyBackends is the number of backend Tor instances whose
+	// descriptors have been observed by the frontend and merged into the
+	// published superdescriptor. May be less than spec.replicas during
+	// rollout or after a node failure.
+	//
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	ReadyBackends int32 `json:"readyBackends,omitempty"`
 }
 
 // +kubebuilder:object:root=true
+// +kubebuilder:resource:categories={gateway-api,tor-gateway},shortName=obp
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Targets",type=string,JSONPath=`.spec.targetRefs[*].name`
+// +kubebuilder:printcolumn:name="Desired",type=integer,JSONPath=`.spec.replicas`
+// +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyBackends`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// OnionBalancePolicy is the Schema for the onionbalancepolicies API
+// OnionBalancePolicy turns a Gateway into a load-balanced hidden service
+// behind a master .onion address using the onionbalance daemon.
 type OnionBalancePolicy struct {
 	metav1.TypeMeta `json:",inline"`
 
-	// metadata is a standard object metadata
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	// spec defines the desired state of OnionBalancePolicy
 	// +required
 	Spec OnionBalancePolicySpec `json:"spec"`
 
-	// status defines the observed state of OnionBalancePolicy
 	// +optional
 	Status OnionBalancePolicyStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
 
-// OnionBalancePolicyList contains a list of OnionBalancePolicy
+// OnionBalancePolicyList contains a list of OnionBalancePolicy.
 type OnionBalancePolicyList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`
