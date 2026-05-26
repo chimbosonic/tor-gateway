@@ -75,17 +75,19 @@ func (r *TorServicePolicyReconciler) buildAncestors(
 	tsp *policyv1alpha1.TorServicePolicy,
 ) ([]gwv1.PolicyAncestorStatus, error) {
 	out := make([]gwv1.PolicyAncestorStatus, 0, len(tsp.Spec.TargetRefs))
+	policyNS := gwv1.Namespace(tsp.Namespace)
 	for _, ref := range tsp.Spec.TargetRefs {
+		grp, kind := ref.Group, ref.Kind
 		ancestor := gwv1.PolicyAncestorStatus{
 			AncestorRef: gwv1.ParentReference{
-				Group:     refPtr(ref.Group),
-				Kind:      refPtr(ref.Kind),
+				Group:     &grp,
+				Kind:      &kind,
 				Name:      ref.Name,
-				Namespace: refPtr(gwv1.Namespace(tsp.Namespace)),
+				Namespace: &policyNS,
 			},
 			ControllerName: ControllerName,
 		}
-		status, reason, msg, err := r.evaluateTarget(ctx, ref, tsp.Namespace)
+		status, reason, msg, err := evaluatePolicyTarget(ctx, r.Client, ref, tsp.Namespace)
 		if err != nil {
 			return nil, err
 		}
@@ -102,13 +104,23 @@ func (r *TorServicePolicyReconciler) buildAncestors(
 	return out, nil
 }
 
-func (r *TorServicePolicyReconciler) evaluateTarget(
+// evaluatePolicyTarget resolves a single LocalPolicyTargetReference and
+// returns the per-ancestor Accepted condition fields. Shared between every
+// policy reconciler so the acceptance taxonomy stays consistent.
+//
+// Possible Reasons:
+//
+//   - Accepted          : target Gateway exists and is managed by us
+//   - TargetNotFound    : referenced Gateway does not exist
+//   - TargetNotManaged  : Gateway exists but its GatewayClass is not ours
+func evaluatePolicyTarget(
 	ctx context.Context,
+	c client.Client,
 	ref gwv1.LocalPolicyTargetReference,
 	ns string,
 ) (metav1.ConditionStatus, string, string, error) {
 	gw := &gwv1.Gateway{}
-	err := r.Get(ctx, client.ObjectKey{Name: string(ref.Name), Namespace: ns}, gw)
+	err := c.Get(ctx, client.ObjectKey{Name: string(ref.Name), Namespace: ns}, gw)
 	switch {
 	case apierrors.IsNotFound(err):
 		return metav1.ConditionFalse, "TargetNotFound", "Referenced Gateway does not exist", nil
@@ -116,7 +128,7 @@ func (r *TorServicePolicyReconciler) evaluateTarget(
 		return "", "", "", err
 	}
 	gc := &gwv1.GatewayClass{}
-	if err := r.Get(ctx, client.ObjectKey{Name: string(gw.Spec.GatewayClassName)}, gc); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: string(gw.Spec.GatewayClassName)}, gc); err != nil {
 		if apierrors.IsNotFound(err) {
 			return metav1.ConditionFalse, "TargetNotManaged",
 				"Gateway's GatewayClass does not exist", nil
@@ -137,10 +149,6 @@ func (r *TorServicePolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("torservicepolicy").
 		Complete(r)
 }
-
-// refPtr returns a pointer to v. Tiny helper because the gateway-api types
-// use *Group / *Kind / *Namespace heavily.
-func refPtr[T any](v T) *T { return &v }
 
 func ancestorsEqual(a, b []gwv1.PolicyAncestorStatus) bool {
 	if len(a) != len(b) {

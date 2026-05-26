@@ -20,7 +20,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -46,6 +45,16 @@ type EffectiveServicePolicy struct {
 	PoWDefensesEnabled bool
 	VanityPrefix       string
 	Resources          corev1.ResourceRequirements
+}
+
+// EffectiveClientAuth resolves any TorClientAuthPolicy attached to a
+// Gateway. When Enabled is false the Tor pod runs as a public hidden
+// service; when true the operator mounts SecretName as a read-only volume
+// and tor-init lays the resulting <label>.auth files under
+// <HiddenServiceDir>/authorized_clients/.
+type EffectiveClientAuth struct {
+	Enabled    bool
+	SecretName string
 }
 
 // DefaultPolicy returns the values used when no TorServicePolicy targets a
@@ -111,8 +120,13 @@ func BuildKeySecret(gw *gwv1.Gateway, kp *tor.KeyPair, scheme *runtime.Scheme) (
 
 // BuildTorrcConfigMap renders the torrc for the Gateway+policy combo into a
 // ConfigMap.
-func BuildTorrcConfigMap(gw *gwv1.Gateway, policy EffectiveServicePolicy, scheme *runtime.Scheme) (*corev1.ConfigMap, error) {
-	rendered, err := tor.Render(&tor.TorrcConfig{
+func BuildTorrcConfigMap(
+	gw *gwv1.Gateway,
+	policy EffectiveServicePolicy,
+	auth EffectiveClientAuth,
+	scheme *runtime.Scheme,
+) (*corev1.ConfigMap, error) {
+	cfg := &tor.TorrcConfig{
 		HiddenServiceDir:   hsDirMountPath,
 		DataDirectory:      dataMountPath,
 		LogLevel:           policy.LogLevel,
@@ -122,7 +136,11 @@ func BuildTorrcConfigMap(gw *gwv1.Gateway, policy EffectiveServicePolicy, scheme
 			TargetHost:  loopbackTargetHost,
 			TargetPort:  loopbackTargetPort,
 		},
-	})
+	}
+	if auth.Enabled {
+		cfg.ClientAuthDir = hsDirMountPath + "/" + tor.AuthorizedClientsSubdir
+	}
+	rendered, err := tor.Render(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("render torrc: %w", err)
 	}
@@ -144,27 +162,47 @@ func BuildTorrcConfigMap(gw *gwv1.Gateway, policy EffectiveServicePolicy, scheme
 
 // BuildDeployment emits the per-Gateway Deployment: init container that
 // populates the HiddenServiceDir with strict permissions, tor as the main
-// container, and the router sidecar.
-func BuildDeployment(gw *gwv1.Gateway, policy EffectiveServicePolicy, images RuntimeImages, scheme *runtime.Scheme) (*appsv1.Deployment, error) {
+// container, and the router sidecar. When auth.Enabled is true, the
+// builder also mounts auth.SecretName at clientAuthMountPath read-only and
+// hands tor-init a --client-auth-src flag so it lays down the
+// authorized_clients/*.auth files.
+func BuildDeployment(
+	gw *gwv1.Gateway,
+	policy EffectiveServicePolicy,
+	auth EffectiveClientAuth,
+	images RuntimeImages,
+	scheme *runtime.Scheme,
+) (*appsv1.Deployment, error) {
 	if images.Tor == "" || images.Router == "" || images.TorInit == "" {
 		return nil, fmt.Errorf("missing image references: %+v", images)
 	}
 	labels := ChildLabels(gw.Name)
 
+	// Pointer-to-literal locals; using ptr.To(true) trips modernize's
+	// `newexpr` rule, whose suggested rewrite to new(T) silently swaps
+	// in the zero value (false / 0) and would weaken pod security.
+	nonRoot := true
+	allowEsc := false
+	readOnlyFS := true
+	uidGid := int64(65532)
+	replicasOne := int32(1)
+	keysMode := int32(0o600)
+	clientAuthMode := int32(0o400)
+
 	podSec := &corev1.PodSecurityContext{
-		RunAsNonRoot: ptr.To(true),
-		RunAsUser:    ptr.To(int64(65532)),
-		RunAsGroup:   ptr.To(int64(65532)),
-		FSGroup:      ptr.To(int64(65532)),
+		RunAsNonRoot: &nonRoot,
+		RunAsUser:    &uidGid,
+		RunAsGroup:   &uidGid,
+		FSGroup:      &uidGid,
 		SeccompProfile: &corev1.SeccompProfile{
 			Type: corev1.SeccompProfileTypeRuntimeDefault,
 		},
 	}
 	hardenedContainerSec := func() *corev1.SecurityContext {
 		return &corev1.SecurityContext{
-			AllowPrivilegeEscalation: ptr.To(false),
-			ReadOnlyRootFilesystem:   ptr.To(true),
-			RunAsNonRoot:             ptr.To(true),
+			AllowPrivilegeEscalation: &allowEsc,
+			ReadOnlyRootFilesystem:   &readOnlyFS,
+			RunAsNonRoot:             &nonRoot,
 			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 		}
 	}
@@ -176,7 +214,7 @@ func BuildDeployment(gw *gwv1.Gateway, policy EffectiveServicePolicy, images Run
 			Labels:    labels,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr.To(int32(1)),
+			Replicas: &replicasOne,
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Strategy: appsv1.DeploymentStrategy{
 				Type: appsv1.RecreateDeploymentStrategyType,
@@ -191,7 +229,7 @@ func BuildDeployment(gw *gwv1.Gateway, policy EffectiveServicePolicy, images Run
 							VolumeSource: corev1.VolumeSource{
 								Secret: &corev1.SecretVolumeSource{
 									SecretName:  KeySecretName(gw.Name),
-									DefaultMode: ptr.To(int32(0o600)),
+									DefaultMode: &keysMode,
 								},
 							},
 						},
@@ -218,15 +256,9 @@ func BuildDeployment(gw *gwv1.Gateway, policy EffectiveServicePolicy, images Run
 						Name:            initContainerName,
 						Image:           images.TorInit,
 						ImagePullPolicy: corev1.PullIfNotPresent,
-						Args: []string{
-							"--src", keysMountPath,
-							"--dst", hsDirMountPath,
-						},
+						Args:            initContainerArgs(auth),
 						SecurityContext: hardenedContainerSec(),
-						VolumeMounts: []corev1.VolumeMount{
-							{Name: keysVolumeName, MountPath: keysMountPath, ReadOnly: true},
-							{Name: hsDirVolumeName, MountPath: hsDirMountPath},
-						},
+						VolumeMounts:    initContainerMounts(auth),
 					}},
 					Containers: []corev1.Container{
 						{
@@ -268,10 +300,53 @@ func BuildDeployment(gw *gwv1.Gateway, policy EffectiveServicePolicy, images Run
 			},
 		},
 	}
+	if auth.Enabled {
+		dep.Spec.Template.Spec.Volumes = append(dep.Spec.Template.Spec.Volumes, corev1.Volume{
+			Name: clientAuthVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  auth.SecretName,
+					DefaultMode: &clientAuthMode,
+				},
+			},
+		})
+	}
+
 	if err := controllerutil.SetControllerReference(gw, dep, scheme); err != nil {
 		return nil, err
 	}
 	return dep, nil
+}
+
+// initContainerArgs returns the flag list passed to tor-init. When client
+// auth is enabled, the --client-auth-src flag points at the Secret mount.
+func initContainerArgs(auth EffectiveClientAuth) []string {
+	args := []string{
+		"--src", keysMountPath,
+		"--dst", hsDirMountPath,
+	}
+	if auth.Enabled {
+		args = append(args, "--client-auth-src", clientAuthMountPath)
+	}
+	return args
+}
+
+// initContainerMounts returns the volume mount list for tor-init. The
+// client-auth mount is added only when auth is enabled so we don't fail
+// pod admission referencing a Secret that wasn't required.
+func initContainerMounts(auth EffectiveClientAuth) []corev1.VolumeMount {
+	mounts := []corev1.VolumeMount{
+		{Name: keysVolumeName, MountPath: keysMountPath, ReadOnly: true},
+		{Name: hsDirVolumeName, MountPath: hsDirMountPath},
+	}
+	if auth.Enabled {
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      clientAuthVolumeName,
+			MountPath: clientAuthMountPath,
+			ReadOnly:  true,
+		})
+	}
+	return mounts
 }
 
 // BuildService emits a headless Service in front of the Tor pod. Used for

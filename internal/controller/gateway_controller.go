@@ -74,6 +74,11 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
+	auth, err := r.findEffectiveClientAuth(ctx, gw)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// 1. Keys (Secret). Generated once; never overwritten on subsequent reconciles.
 	secret, kp, err := r.ensureKeySecret(ctx, gw)
 	if err != nil {
@@ -82,12 +87,12 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	_ = secret // retained for explicit ownership trace; child objects use the name
 
 	// 2. torrc ConfigMap.
-	if _, err := r.ensureTorrcConfigMap(ctx, gw, policy); err != nil {
+	if _, err := r.ensureTorrcConfigMap(ctx, gw, policy, auth); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure torrc configmap: %w", err)
 	}
 
 	// 3. Deployment.
-	if _, err := r.ensureDeployment(ctx, gw, policy); err != nil {
+	if _, err := r.ensureDeployment(ctx, gw, policy, auth); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure deployment: %w", err)
 	}
 
@@ -145,7 +150,7 @@ func (r *GatewayReconciler) findEffectivePolicy(ctx context.Context, gw *gwv1.Ga
 // (Group=gateway.networking.k8s.io, Kind=Gateway).
 func policyTargets(refs []gwv1.LocalPolicyTargetReference, gw string) bool {
 	for _, r := range refs {
-		if r.Group != "gateway.networking.k8s.io" || r.Kind != "Gateway" {
+		if r.Group != GatewayAPIGroup || r.Kind != GatewayKind {
 			continue
 		}
 		if string(r.Name) == gw {
@@ -153,6 +158,49 @@ func policyTargets(refs []gwv1.LocalPolicyTargetReference, gw string) bool {
 		}
 	}
 	return false
+}
+
+// findEffectiveClientAuth scans TorClientAuthPolicies in the Gateway's
+// namespace and returns the effective client-auth settings to use when
+// building child resources. Multiple policies targeting the same Gateway
+// resolve to the lexically-first by name (matching findEffectivePolicy).
+//
+// In Audit mode the operator emits a log line and proceeds as if no auth
+// were configured. A future iteration will surface this via a Kubernetes
+// Event so the user can see it without reading operator logs.
+func (r *GatewayReconciler) findEffectiveClientAuth(
+	ctx context.Context,
+	gw *gwv1.Gateway,
+) (EffectiveClientAuth, error) {
+	logger := log.FromContext(ctx)
+	list := &policyv1alpha1.TorClientAuthPolicyList{}
+	if err := r.List(ctx, list, client.InNamespace(gw.Namespace)); err != nil {
+		return EffectiveClientAuth{}, err
+	}
+	var matched *policyv1alpha1.TorClientAuthPolicy
+	for i := range list.Items {
+		p := &list.Items[i]
+		if policyTargets(p.Spec.TargetRefs, gw.Name) {
+			if matched == nil || p.Name < matched.Name {
+				matched = p
+			}
+		}
+	}
+	if matched == nil {
+		return EffectiveClientAuth{}, nil
+	}
+	if matched.Spec.Mode == policyv1alpha1.ClientAuthModeAudit {
+		logger.Info("TorClientAuthPolicy in Audit mode; allowing unauthorized clients",
+			"policy", matched.Name)
+		return EffectiveClientAuth{}, nil
+	}
+	// Cross-namespace SecretRefs require ReferenceGrant and are not yet
+	// supported; the policy's CRD-level validation accepts a Namespace
+	// field but the Gateway reconciler ignores it for now.
+	return EffectiveClientAuth{
+		Enabled:    true,
+		SecretName: matched.Spec.ClientsSecretRef.Name,
+	}, nil
 }
 
 func (r *GatewayReconciler) ensureKeySecret(
@@ -197,8 +245,9 @@ func (r *GatewayReconciler) ensureTorrcConfigMap(
 	ctx context.Context,
 	gw *gwv1.Gateway,
 	policy EffectiveServicePolicy,
+	auth EffectiveClientAuth,
 ) (*corev1.ConfigMap, error) {
-	desired, err := BuildTorrcConfigMap(gw, policy, r.Scheme)
+	desired, err := BuildTorrcConfigMap(gw, policy, auth, r.Scheme)
 	if err != nil {
 		return nil, err
 	}
@@ -220,8 +269,9 @@ func (r *GatewayReconciler) ensureDeployment(
 	ctx context.Context,
 	gw *gwv1.Gateway,
 	policy EffectiveServicePolicy,
+	auth EffectiveClientAuth,
 ) (*appsv1.Deployment, error) {
-	desired, err := BuildDeployment(gw, policy, r.Images, r.Scheme)
+	desired, err := BuildDeployment(gw, policy, auth, r.Images, r.Scheme)
 	if err != nil {
 		return nil, err
 	}

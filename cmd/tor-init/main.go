@@ -32,24 +32,29 @@ import (
 
 func main() {
 	var (
-		src string
-		dst string
+		src           string
+		dst           string
+		clientAuthSrc string
 	)
 	flag.StringVar(&src, "src", "/etc/tor-keys", "directory containing the mounted key Secret")
 	flag.StringVar(&dst, "dst", "/var/lib/tor/hs", "HiddenServiceDir to populate")
+	flag.StringVar(&clientAuthSrc, "client-auth-src", "",
+		"optional directory containing client-auth Secret entries; when set, "+
+			"each non-dotfile entry is written as <label>.auth into "+
+			"<dst>/authorized_clients/")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	if err := run(src, dst); err != nil {
+	if err := run(src, dst, clientAuthSrc); err != nil {
 		slog.Error("tor-init failed", "err", err)
 		os.Exit(1)
 	}
-	slog.Info("tor-init ok", "src", src, "dst", dst)
+	slog.Info("tor-init ok", "src", src, "dst", dst, "client_auth", clientAuthSrc != "")
 }
 
-func run(src, dst string) error {
+func run(src, dst, clientAuthSrc string) error {
 	if err := os.MkdirAll(dst, tor.HiddenServiceDirMode); err != nil {
 		return err
 	}
@@ -65,6 +70,23 @@ func run(src, dst string) error {
 		}
 		if err := copyFile(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name())); err != nil {
 			return err
+		}
+	}
+
+	// Optionally lay down client-auth files. Skipped silently when
+	// clientAuthSrc is empty so the same init image works for both
+	// standalone-public and client-auth-protected Gateways.
+	if clientAuthSrc != "" {
+		clients, err := tor.LoadAuthorizedClientsFromDir(clientAuthSrc)
+		if err != nil {
+			return err
+		}
+		if err := tor.WriteAuthorizedClients(dst, clients); err != nil {
+			// WriteAuthorizedClients returns an aggregate error for
+			// invalid entries but still writes the valid ones. Log and
+			// continue so Tor starts with the partial set rather than
+			// locking everyone out.
+			slog.Warn("tor-init: some client-auth entries skipped", "err", err)
 		}
 	}
 	return tor.FixPermissions(dst)

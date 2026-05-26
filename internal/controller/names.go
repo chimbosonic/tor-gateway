@@ -60,6 +60,14 @@ const (
 	configMountPath    = "/etc/tor"
 	loopbackTargetHost = "127.0.0.1"
 	loopbackTargetPort = 9080
+
+	// clientAuthVolumeName / clientAuthMountPath are used when a
+	// TorClientAuthPolicy is attached: the Secret holding client pubkeys
+	// is mounted read-only at clientAuthMountPath, then tor-init reads
+	// each entry and writes the matching <label>.auth file into the
+	// hidden-service authorized_clients/ subdir.
+	clientAuthVolumeName = "tor-client-auth"
+	clientAuthMountPath  = "/etc/tor-client-auth"
 )
 
 // KeySecretName returns the deterministic Secret name holding the per-Gateway

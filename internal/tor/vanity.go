@@ -21,7 +21,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 )
 
 // VanityJobConfig is the input to VanityJob. All fields are operator-owned;
@@ -119,19 +118,25 @@ func VanityJob(cfg VanityJobConfig) (*batchv1.Job, error) {
 		"app.kubernetes.io/component":  "vanity",
 	}, cfg.Labels)
 
+	nonRoot := true
+	uidGid := int64(65532)
 	podSec := &corev1.PodSecurityContext{
-		RunAsNonRoot: ptr.To(true),
-		RunAsUser:    ptr.To(int64(65532)),
-		RunAsGroup:   ptr.To(int64(65532)),
-		FSGroup:      ptr.To(int64(65532)),
+		RunAsNonRoot: &nonRoot,
+		RunAsUser:    &uidGid,
+		RunAsGroup:   &uidGid,
+		FSGroup:      &uidGid,
 		SeccompProfile: &corev1.SeccompProfile{
 			Type: corev1.SeccompProfileTypeRuntimeDefault,
 		},
 	}
+	allowEsc := false
+	readOnlyFS := true
+	backoffZero := int32(0)
+	ttl := int32(3600)
 	containerSec := &corev1.SecurityContext{
-		AllowPrivilegeEscalation: ptr.To(false),
-		ReadOnlyRootFilesystem:   ptr.To(true),
-		RunAsNonRoot:             ptr.To(true),
+		AllowPrivilegeEscalation: &allowEsc,
+		ReadOnlyRootFilesystem:   &readOnlyFS,
+		RunAsNonRoot:             &nonRoot,
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 	}
 
@@ -148,9 +153,9 @@ func VanityJob(cfg VanityJobConfig) (*batchv1.Job, error) {
 			Labels:    labels,
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit:            ptr.To(int32(0)),
-			ActiveDeadlineSeconds:   ptr.To(deadlineSec),
-			TTLSecondsAfterFinished: ptr.To(int32(3600)),
+			BackoffLimit:            &backoffZero,
+			ActiveDeadlineSeconds:   &deadlineSec,
+			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      labels,

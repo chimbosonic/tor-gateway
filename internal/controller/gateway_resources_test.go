@@ -113,7 +113,7 @@ func TestBuildTorrcConfigMap_UsesPolicyValues(t *testing.T) {
 	cm, err := BuildTorrcConfigMap(gw, EffectiveServicePolicy{
 		LogLevel:           "debug",
 		PoWDefensesEnabled: false,
-	}, scheme)
+	}, EffectiveClientAuth{}, scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestBuildTorrcConfigMap_UsesPolicyValues(t *testing.T) {
 func TestBuildTorrcConfigMap_DefaultPolicyEnablesPoW(t *testing.T) {
 	scheme := testScheme(t)
 	gw := sampleGateway()
-	cm, err := BuildTorrcConfigMap(gw, DefaultPolicy(), scheme)
+	cm, err := BuildTorrcConfigMap(gw, DefaultPolicy(), EffectiveClientAuth{}, scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestBuildTorrcConfigMap_DefaultPolicyEnablesPoW(t *testing.T) {
 func TestBuildDeployment_ContainersAndHardening(t *testing.T) {
 	scheme := testScheme(t)
 	gw := sampleGateway()
-	dep, err := BuildDeployment(gw, DefaultPolicy(), sampleImages(), scheme)
+	dep, err := BuildDeployment(gw, DefaultPolicy(), EffectiveClientAuth{}, sampleImages(), scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestBuildDeployment_ContainersAndHardening(t *testing.T) {
 func TestBuildDeployment_VolumeWiring(t *testing.T) {
 	scheme := testScheme(t)
 	gw := sampleGateway()
-	dep, err := BuildDeployment(gw, DefaultPolicy(), sampleImages(), scheme)
+	dep, err := BuildDeployment(gw, DefaultPolicy(), EffectiveClientAuth{}, sampleImages(), scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestBuildDeployment_VolumeWiring(t *testing.T) {
 func TestBuildDeployment_RequiresImages(t *testing.T) {
 	scheme := testScheme(t)
 	gw := sampleGateway()
-	if _, err := BuildDeployment(gw, DefaultPolicy(), RuntimeImages{Router: "x", TorInit: "y"}, scheme); err == nil {
+	if _, err := BuildDeployment(gw, DefaultPolicy(), EffectiveClientAuth{}, RuntimeImages{Router: "x", TorInit: "y"}, scheme); err == nil {
 		t.Fatal("expected error with missing Tor image")
 	}
 }
@@ -290,4 +290,85 @@ func TestFromTorServicePolicy_RespectsSpec(t *testing.T) {
 
 func hasCap(list []corev1.Capability, want corev1.Capability) bool {
 	return slices.Contains(list, want)
+}
+
+// --- Client auth wiring ---
+
+func TestBuildTorrcConfigMap_ClientAuthEnabled_SetsAuthDir(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	cm, err := BuildTorrcConfigMap(gw, DefaultPolicy(),
+		EffectiveClientAuth{Enabled: true, SecretName: "blog-clients"}, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	torrc := cm.Data["torrc"]
+	if !strings.Contains(torrc, "client authorization enabled") {
+		t.Fatalf("expected client-auth marker comment in torrc; got %q", torrc)
+	}
+}
+
+func TestBuildDeployment_ClientAuth_AddsVolumeMountAndFlag(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	dep, err := BuildDeployment(gw, DefaultPolicy(),
+		EffectiveClientAuth{Enabled: true, SecretName: "blog-clients"},
+		sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := dep.Spec.Template.Spec
+
+	var clientAuthVol *corev1.Volume
+	for i := range tpl.Volumes {
+		if tpl.Volumes[i].Name == clientAuthVolumeName {
+			clientAuthVol = &tpl.Volumes[i]
+			break
+		}
+	}
+	if clientAuthVol == nil {
+		t.Fatal("expected a tor-client-auth Volume when ClientAuth is enabled")
+	}
+	if clientAuthVol.Secret == nil || clientAuthVol.Secret.SecretName != "blog-clients" {
+		t.Fatalf("client-auth volume should reference SecretName=%q, got %+v",
+			"blog-clients", clientAuthVol.Secret)
+	}
+
+	if len(tpl.InitContainers) != 1 {
+		t.Fatalf("expected one init container, got %d", len(tpl.InitContainers))
+	}
+	init := tpl.InitContainers[0]
+	if !slices.Contains(init.Args, "--client-auth-src") {
+		t.Fatalf("tor-init args missing --client-auth-src; got %v", init.Args)
+	}
+	mountSeen := false
+	for _, m := range init.VolumeMounts {
+		if m.Name == clientAuthVolumeName {
+			mountSeen = true
+			if !m.ReadOnly {
+				t.Fatal("client-auth mount must be read-only")
+			}
+		}
+	}
+	if !mountSeen {
+		t.Fatal("tor-init init container missing tor-client-auth mount")
+	}
+}
+
+func TestBuildDeployment_ClientAuthDisabled_NoExtraVolume(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	dep, err := BuildDeployment(gw, DefaultPolicy(),
+		EffectiveClientAuth{}, sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.Name == clientAuthVolumeName {
+			t.Fatalf("client-auth volume should be absent when ClientAuth.Enabled=false")
+		}
+	}
+	if slices.Contains(dep.Spec.Template.Spec.InitContainers[0].Args, "--client-auth-src") {
+		t.Fatalf("tor-init args should not include --client-auth-src when ClientAuth.Enabled=false")
+	}
 }

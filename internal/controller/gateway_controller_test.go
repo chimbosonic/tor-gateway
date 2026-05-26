@@ -178,6 +178,74 @@ var _ = Describe("Gateway reconciler", func() {
 		Expect(cm.Data["torrc"]).To(ContainSubstring("Log debug stdout"))
 		Expect(cm.Data["torrc"]).NotTo(ContainSubstring("HiddenServicePoWDefensesEnabled 1"))
 	})
+
+	It("mounts the clients Secret when a Strict TorClientAuthPolicy targets the Gateway", func() {
+		gw := makeGateway("strict-auth", "default", "tor-gateway-test")
+
+		tcap := &policyv1alpha1.TorClientAuthPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "strict-auth-tcap", Namespace: "default"},
+			Spec: policyv1alpha1.TorClientAuthPolicySpec{
+				TargetRefs: []gwv1.LocalPolicyTargetReference{{
+					Group: "gateway.networking.k8s.io",
+					Kind:  "Gateway",
+					Name:  gwv1.ObjectName(gw.Name),
+				}},
+				ClientsSecretRef: policyv1alpha1.ClientsSecretRef{Name: "strict-auth-clients"},
+				Mode:             policyv1alpha1.ClientAuthModeStrict,
+			},
+		}
+		Expect(k8sClient.Create(ctx, tcap)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, tcap) })
+
+		reconcileGW(gw.Name, gw.Namespace)
+
+		dep := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Name: DeploymentName(gw.Name), Namespace: gw.Namespace,
+		}, dep)).To(Succeed())
+
+		hasClientAuthVol := false
+		for _, v := range dep.Spec.Template.Spec.Volumes {
+			if v.Name == clientAuthVolumeName {
+				hasClientAuthVol = true
+				Expect(v.Secret).NotTo(BeNil())
+				Expect(v.Secret.SecretName).To(Equal("strict-auth-clients"))
+			}
+		}
+		Expect(hasClientAuthVol).To(BeTrue(), "client-auth volume should be added when policy is Strict")
+		Expect(dep.Spec.Template.Spec.InitContainers[0].Args).To(
+			ContainElement("--client-auth-src"))
+	})
+
+	It("does NOT mount the clients Secret when the policy is in Audit mode", func() {
+		gw := makeGateway("audit-auth", "default", "tor-gateway-test")
+
+		tcap := &policyv1alpha1.TorClientAuthPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "audit-auth-tcap", Namespace: "default"},
+			Spec: policyv1alpha1.TorClientAuthPolicySpec{
+				TargetRefs: []gwv1.LocalPolicyTargetReference{{
+					Group: "gateway.networking.k8s.io",
+					Kind:  "Gateway",
+					Name:  gwv1.ObjectName(gw.Name),
+				}},
+				ClientsSecretRef: policyv1alpha1.ClientsSecretRef{Name: "audit-auth-clients"},
+				Mode:             policyv1alpha1.ClientAuthModeAudit,
+			},
+		}
+		Expect(k8sClient.Create(ctx, tcap)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, tcap) })
+
+		reconcileGW(gw.Name, gw.Namespace)
+
+		dep := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Name: DeploymentName(gw.Name), Namespace: gw.Namespace,
+		}, dep)).To(Succeed())
+		for _, v := range dep.Spec.Template.Spec.Volumes {
+			Expect(v.Name).NotTo(Equal(clientAuthVolumeName),
+				"Audit mode must not add the client-auth volume")
+		}
+	})
 })
 
 // assertGwConditionTrue asserts the Gateway has the given condition with

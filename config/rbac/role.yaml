@@ -54,7 +54,6 @@ rules:
   - policy.torgateway.io
   resources:
   - onionbalancepolicies
-  - torclientauthpolicies
   verbs:
   - create
   - delete
@@ -67,7 +66,6 @@ rules:
   - policy.torgateway.io
   resources:
   - onionbalancepolicies/finalizers
-  - torclientauthpolicies/finalizers
   verbs:
   - update
 - apiGroups:
@@ -83,6 +81,7 @@ rules:
 - apiGroups:
   - policy.torgateway.io
   resources:
+  - torclientauthpolicies
   - torservicepolicies
   verbs:
   - get
