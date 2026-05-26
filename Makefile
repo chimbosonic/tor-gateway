@@ -126,7 +126,7 @@ install-gateway-api-crds: ## Apply gateway-api standard-channel CRDs to the curr
 	$(KUBECTL) apply -f $(GATEWAY_API_CRDS_DIR)
 
 .PHONY: test-conformance
-test-conformance: setup-test-e2e manifests generate fmt vet ## Run the upstream Gateway API conformance suite against Kind.
+test-conformance: setup-test-e2e manifests generate fmt vet ## Verify the deployed operator satisfies the Gateway API status contract (Kind).
 	@command -v $(KIND) >/dev/null 2>&1 || { echo "kind required for conformance"; exit 1; }
 	$(MAKE) docker-build IMG=$(MANAGER_IMG)
 	$(KIND) load docker-image $(MANAGER_IMG) --name $(KIND_CLUSTER)
@@ -134,16 +134,13 @@ test-conformance: setup-test-e2e manifests generate fmt vet ## Run the upstream 
 	$(MAKE) install
 	$(MAKE) deploy IMG=$(MANAGER_IMG)
 	# `make deploy` installs the operator only; register the GatewayClass
-	# the conformance suite will point at via -gateway-class=tor-gateway.
+	# our API-shape test points at.
 	$(KUBECTL) apply -f config/samples/gatewayclass.yaml
-	go test -tags=conformance -timeout 30m ./test/conformance -v \
-	  -args \
-	    -gateway-class=tor-gateway \
-	    -supported-features=Gateway \
-	    -project=tor-gateway \
-	    -organization=chimbosonic \
-	    -conformance-profiles=GATEWAY-HTTP \
-	    -allow-crds-mismatch
+	# Custom API-shape conformance (see test/conformance): a Tor hidden-
+	# service gateway can't satisfy the upstream GATEWAY-HTTP traffic
+	# profile (no clearnet HTTP, no IP-reachable address), so we assert the
+	# subset of the Gateway API status contract we DO implement.
+	go test -tags=conformance -timeout 10m ./test/conformance -v
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: lint
