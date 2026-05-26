@@ -1,0 +1,10 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: tor-gateway
+spec:
+  # MUST match controller.ControllerName in internal/controller/names.go.
+  # The conformance suite + e2e Makefile target apply this manifest so
+  # the operator has something to accept; the Helm chart ships an
+  # equivalent template for users installing via Helm.
+  controllerName: torgateway.io/gateway-controller

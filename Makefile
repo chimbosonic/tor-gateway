@@ -118,6 +118,9 @@ test-conformance: setup-test-e2e manifests generate fmt vet ## Run the upstream 
 	$(MAKE) install-gateway-api-crds
 	$(MAKE) install
 	$(MAKE) deploy IMG=$(MANAGER_IMG)
+	# `make deploy` installs the operator only; register the GatewayClass
+	# the conformance suite will point at via -gateway-class=tor-gateway.
+	$(KUBECTL) apply -f config/samples/gatewayclass.yaml
 	go test -tags=conformance -timeout 30m ./test/conformance -v \
 	  -args \
 	    -gateway-class=tor-gateway \
