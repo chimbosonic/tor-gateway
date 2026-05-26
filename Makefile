@@ -100,6 +100,34 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+# Gateway API CRDs and conformance targets.
+# Both pull from the gateway-api Go module cache so the version stays in
+# lockstep with go.mod (no separate version-tracking surface).
+GATEWAY_API_DIR ?= $(shell go list -m -f '{{.Dir}}' sigs.k8s.io/gateway-api)
+GATEWAY_API_CRDS_DIR ?= $(GATEWAY_API_DIR)/config/crd/standard
+
+.PHONY: install-gateway-api-crds
+install-gateway-api-crds: ## Apply gateway-api standard-channel CRDs to the current kube context.
+	$(KUBECTL) apply -f $(GATEWAY_API_CRDS_DIR)
+
+.PHONY: test-conformance
+test-conformance: setup-test-e2e manifests generate fmt vet ## Run the upstream Gateway API conformance suite against Kind.
+	@command -v $(KIND) >/dev/null 2>&1 || { echo "kind required for conformance"; exit 1; }
+	$(MAKE) docker-build IMG=$(MANAGER_IMG)
+	$(KIND) load docker-image $(MANAGER_IMG) --name $(KIND_CLUSTER)
+	$(MAKE) install-gateway-api-crds
+	$(MAKE) install
+	$(MAKE) deploy IMG=$(MANAGER_IMG)
+	go test -tags=conformance -timeout 30m ./test/conformance -v \
+	  -args \
+	    -gateway-class=tor-gateway \
+	    -supported-features=Gateway \
+	    -implementation-name=tor-gateway \
+	    -implementation-organization=chimbosonic \
+	    -conformance-profiles=GATEWAY-HTTP \
+	    -allow-crds-mismatch
+	$(MAKE) cleanup-test-e2e
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run

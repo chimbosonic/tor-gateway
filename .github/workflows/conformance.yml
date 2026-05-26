@@ -1,24 +1,17 @@
-name: E2E Tests
+name: Conformance
 
-# E2E spins up Kind, builds and loads images, applies the operator, and
-# exercises live reconcilers. Costs 3-5 minutes per run; we gate every PR
-# on the faster conformance and unit/envtest suites instead and run e2e
-# on push-to-main and a nightly cron so regressions surface within 24h.
 on:
   push:
     branches: [main]
-  schedule:
-    # Daily at 03:17 UTC.
-    - cron: "17 3 * * *"
-  workflow_dispatch: {}
+  pull_request:
 
 permissions: {}
 
 jobs:
-  test-e2e:
+  conformance:
+    name: Gateway API conformance
     permissions:
       contents: read
-    name: Run on Ubuntu
     runs-on: ubuntu-latest
     steps:
       - name: Clone the code
@@ -31,16 +24,17 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install the latest version of kind
+      - name: Install kind
         run: |
           curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-$(go env GOARCH)
           chmod +x ./kind
           sudo mv ./kind /usr/local/bin/kind
+          kind version
 
-      - name: Verify kind installation
-        run: kind version
-
-      - name: Running Test e2e
+      - name: Run upstream Gateway API conformance suite
+        # The Makefile target builds the manager image, loads it into Kind,
+        # installs CRDs and the operator, then runs the conformance suite
+        # with the features we currently claim. See test/conformance.
         run: |
           go mod tidy
-          make test-e2e
+          make test-conformance
