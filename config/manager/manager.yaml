@@ -58,9 +58,11 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-      - command:
-        - /manager
-        args:
+        # No `command:` override — rely on the image ENTRYPOINT
+        # (/usr/local/bin/app). Our multi-binary Dockerfile installs every
+        # binary at that path, so hardcoding /manager here (the kubebuilder
+        # default) breaks the container with exec: "/manager" not found.
+      - args:
           - --leader-elect
           - --health-probe-bind-address=:8081
         image: controller:latest

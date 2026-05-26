@@ -39,6 +39,9 @@ const (
 
 var _ = Describe("Gateway lifecycle", Ordered, Label("gateway"), func() {
 
+	// The operator + CRDs are deployed once at suite level
+	// (deployOperator in e2e_suite_test.go), so this container only needs
+	// its own namespace and GatewayClass.
 	BeforeAll(func() {
 		By("creating an isolated test namespace")
 		runOrSkipExisting("kubectl", "create", "ns", testNamespace)
@@ -93,21 +96,21 @@ spec:
 			Should(Equal("None"))
 
 		By("checking OwnerReferences on each child")
-		for _, kind := range []string{"secret", "configmap", "service", "deployment"} {
+		// Each child has its own deterministic name (the Secret is
+		// <gw>-keys, the ConfigMap <gw>-torrc, the Deployment/Service
+		// just <gw>); assert every one carries a Gateway ownerReference.
+		children := map[string]string{
+			"secret":     "blog-keys",
+			"configmap":  "blog-torrc",
+			"service":    "blog",
+			"deployment": "blog",
+		}
+		for kind, name := range children {
 			out, err := utils.Run(exec.Command("kubectl", "-n", testNamespace,
-				"get", kind, "blog", "-o", "jsonpath={.metadata.ownerReferences[0].kind}"))
-			Expect(err).NotTo(HaveOccurred())
-			// Secret/CM/Service all named blog have suffix; pick the right one
-			if kind == "secret" {
-				out, _ = utils.Run(exec.Command("kubectl", "-n", testNamespace,
-					"get", "secret", "blog-keys", "-o", "jsonpath={.metadata.ownerReferences[0].kind}"))
-			}
-			if kind == "configmap" {
-				out, _ = utils.Run(exec.Command("kubectl", "-n", testNamespace,
-					"get", "configmap", "blog-torrc", "-o", "jsonpath={.metadata.ownerReferences[0].kind}"))
-			}
+				"get", kind, name, "-o", "jsonpath={.metadata.ownerReferences[0].kind}"))
+			Expect(err).NotTo(HaveOccurred(), "getting %s/%s", kind, name)
 			Expect(strings.TrimSpace(string(out))).To(Equal("Gateway"),
-				"child %s should be owned by Gateway", kind)
+				"%s/%s should be owned by Gateway", kind, name)
 		}
 
 		By("waiting for Gateway.status.addresses to publish a .onion")

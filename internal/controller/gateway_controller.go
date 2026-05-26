@@ -23,7 +23,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
@@ -397,6 +399,12 @@ func (r *GatewayReconciler) updateStatus(ctx context.Context, gw *gwv1.Gateway, 
 }
 
 // SetupWithManager registers the Gateway reconciler.
+//
+// Besides owning its child resources, the Gateway reconciler watches the
+// policy CRDs that influence rendered output (TorServicePolicy,
+// TorClientAuthPolicy). Without these watches, creating or editing a
+// policy after its target Gateway already exists would not re-render the
+// torrc/Deployment until the next Gateway event.
 func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&gwv1.Gateway{}).
@@ -404,8 +412,45 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
+		Watches(&policyv1alpha1.TorServicePolicy{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForServicePolicy)).
+		Watches(&policyv1alpha1.TorClientAuthPolicy{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForClientAuthPolicy)).
 		Named("gateway").
 		Complete(r)
+}
+
+// gatewaysForServicePolicy maps a TorServicePolicy to reconcile requests for
+// every Gateway it targets in the same namespace.
+func (r *GatewayReconciler) gatewaysForServicePolicy(_ context.Context, obj client.Object) []reconcile.Request {
+	p, ok := obj.(*policyv1alpha1.TorServicePolicy)
+	if !ok {
+		return nil
+	}
+	return requestsForTargets(p.Namespace, p.Spec.TargetRefs)
+}
+
+// gatewaysForClientAuthPolicy maps a TorClientAuthPolicy to reconcile
+// requests for every Gateway it targets in the same namespace.
+func (r *GatewayReconciler) gatewaysForClientAuthPolicy(_ context.Context, obj client.Object) []reconcile.Request {
+	p, ok := obj.(*policyv1alpha1.TorClientAuthPolicy)
+	if !ok {
+		return nil
+	}
+	return requestsForTargets(p.Namespace, p.Spec.TargetRefs)
+}
+
+// requestsForTargets turns a policy's Gateway targetRefs into reconcile
+// requests, ignoring refs that don't point at a Gateway.
+func requestsForTargets(ns string, refs []gwv1.LocalPolicyTargetReference) []reconcile.Request {
+	var out []reconcile.Request
+	for _, ref := range refs {
+		if ref.Group != GatewayAPIGroup || ref.Kind != GatewayKind {
+			continue
+		}
+		out = append(out, reconcile.Request{
+			NamespacedName: client.ObjectKey{Namespace: ns, Name: string(ref.Name)},
+		})
+	}
+	return out
 }
 
 func equalGatewayAddresses(a, b []gwv1.GatewayStatusAddress) bool {

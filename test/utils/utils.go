@@ -133,20 +133,57 @@ func IsCertManagerCRDsInstalled() bool {
 	return false
 }
 
-// LoadImageToKindClusterWithName loads a local docker image to the kind cluster
+// LoadImageToKindClusterWithName loads a local container image into the
+// kind cluster.
+//
+// The direct `kind load docker-image` path is fast and self-contained for
+// the docker provider, but is unreliable under the podman provider in
+// kind v0.31: kind reports the freshly-tagged image as "not present
+// locally" even when `podman image inspect` finds it. To stay portable
+// we transparently fall back to the archive path (`podman save` →
+// `kind load image-archive`) when KIND_EXPERIMENTAL_PROVIDER=podman is
+// set in the environment.
 func LoadImageToKindClusterWithName(name string) error {
 	cluster := defaultKindCluster
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
 		cluster = v
 	}
-	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
 	kindBinary := defaultKindBinary
 	if v, ok := os.LookupEnv("KIND"); ok {
 		kindBinary = v
 	}
-	cmd := exec.Command(kindBinary, kindOptions...)
+
+	if os.Getenv("KIND_EXPERIMENTAL_PROVIDER") == "podman" {
+		return loadImageViaArchive(kindBinary, name, cluster)
+	}
+
+	cmd := exec.Command(kindBinary, "load", "docker-image", name, "--name", cluster)
 	_, err := Run(cmd)
 	return err
+}
+
+// loadImageViaArchive saves an image to a temporary tarball with podman
+// then asks kind to load that archive into the cluster. Bypasses the
+// kind-podman name-resolution bug described in
+// LoadImageToKindClusterWithName.
+func loadImageViaArchive(kindBinary, image, cluster string) error {
+	f, err := os.CreateTemp("", "tor-gateway-kind-load-*.tar")
+	if err != nil {
+		return fmt.Errorf("create tarball: %w", err)
+	}
+	tar := f.Name()
+	_ = f.Close()
+	defer func() { _ = os.Remove(tar) }()
+
+	save := exec.Command("podman", "save", "-o", tar, image)
+	if _, err := Run(save); err != nil {
+		return fmt.Errorf("podman save %s: %w", image, err)
+	}
+	load := exec.Command(kindBinary, "load", "image-archive", tar, "--name", cluster)
+	if _, err := Run(load); err != nil {
+		return fmt.Errorf("kind load image-archive: %w", err)
+	}
+	return nil
 }
 
 // GetNonEmptyLines converts given command output string into individual objects

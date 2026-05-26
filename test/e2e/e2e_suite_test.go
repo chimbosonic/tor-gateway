@@ -23,7 +23,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -64,11 +66,49 @@ var _ = BeforeSuite(func() {
 
 	configureKubectlKubeRC()
 	setupCertManager()
+	deployOperator()
 })
 
 var _ = AfterSuite(func() {
+	teardownOperator()
 	teardownCertManager()
 })
+
+// deployOperator installs the gateway-api standard CRDs, the tor-gateway
+// policy CRDs, and the operator itself once for the whole suite. Both the
+// Manager and Gateway lifecycle containers share this single deployment so
+// they can run in any order without clobbering each other's setup.
+func deployOperator() {
+	By("installing gateway-api CRDs")
+	_, err := utils.Run(exec.Command("make", "install-gateway-api-crds"))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to install gateway-api CRDs")
+
+	By("installing tor-gateway CRDs")
+	_, err = utils.Run(exec.Command("make", "install"))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to install tor-gateway CRDs")
+
+	By("deploying the controller-manager")
+	_, err = utils.Run(exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage)))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+
+	By("waiting for the controller-manager to be Available")
+	Eventually(func() string {
+		out, _ := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-system",
+			"get", "deployment", "tor-gateway-controller-manager",
+			"-o", "jsonpath={.status.conditions[?(@.type==\"Available\")].status}"))
+		return strings.TrimSpace(string(out))
+	}, 2*time.Minute, 3*time.Second).Should(Equal("True"),
+		"operator deployment never became Available")
+}
+
+// teardownOperator removes everything deployOperator created. Best-effort:
+// errors are ignored so a failing spec still tears down cleanly.
+func teardownOperator() {
+	By("undeploying the controller-manager")
+	_, _ = utils.Run(exec.Command("make", "undeploy", "ignore-not-found=true"))
+	By("uninstalling tor-gateway CRDs")
+	_, _ = utils.Run(exec.Command("make", "uninstall", "ignore-not-found=true"))
+}
 
 // Disable kubectl kuberc by default for test isolation.
 // This prevents local kubectl configurations from affecting test behavior.

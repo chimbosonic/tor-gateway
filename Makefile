@@ -10,17 +10,27 @@ else
 GOBIN=$(shell go env GOBIN)
 endif
 
-# CONTAINER_TOOL defines the container tool to be used for building images.
-# Be aware that the target commands are only tested with Docker which is
-# scaffolded by default. However, you might want to replace it to use other
-# tools. (i.e. podman)
-CONTAINER_TOOL ?= podman
+# CONTAINER_TOOL is the container CLI used by all image-related targets and
+# by kind's image loading. Defaults to docker (matches CI's ubuntu-latest
+# runners, Rancher Desktop, Docker Desktop, and Colima). Set
+# CONTAINER_TOOL=podman to use podman locally; the kind provider switch
+# below routes accordingly.
+CONTAINER_TOOL ?= docker
 REGISTRY ?= ghcr.io/chimbosonic
 IMAGE_TAG ?= dev
 MANAGER_IMG ?= $(REGISTRY)/tor-gateway-manager:$(IMAGE_TAG)
 ROUTER_IMG  ?= $(REGISTRY)/tor-gateway-router:$(IMAGE_TAG)
 OBREFRESH_IMG ?= $(REGISTRY)/tor-gateway-obrefresh:$(IMAGE_TAG)
 IMG ?= $(MANAGER_IMG)
+
+# When CONTAINER_TOOL is podman, point kind at podman too so the cluster
+# itself, image builds, and `kind load docker-image` all share one
+# container runtime. CI sets CONTAINER_TOOL=docker (the GitHub-hosted
+# ubuntu runners ship docker), so this guard leaves the docker path
+# untouched there.
+ifeq ($(CONTAINER_TOOL),podman)
+export KIND_EXPERIMENTAL_PROVIDER := podman
+endif
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
@@ -93,7 +103,12 @@ setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
 
 .PHONY: test-e2e
 test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
+	# CERT_MANAGER_INSTALL_SKIP: the kubebuilder e2e harness installs
+	# cert-manager so its scaffolded webhook tests can run. tor-gateway
+	# has no admission webhooks, so cert-manager is dead weight that
+	# also adds ~1m of cluster setup and the occasional flaky install.
+	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) CERT_MANAGER_INSTALL_SKIP=true \
+		go test -tags=e2e ./test/e2e/ -v -ginkgo.v
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e
