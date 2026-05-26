@@ -1,11 +1,31 @@
-# More info: https://docs.docker.com/engine/reference/builder/#dockerignore-file
-# Ignore everything by default and re-include only needed files
-**
+# Exclude everything we don't need in the build context. The Dockerfile
+# COPYs go.mod/go.sum and the three source trees (api/, cmd/, internal/)
+# explicitly, so anything not under those is safe to skip — and skipping
+# it speeds up the build context tar significantly.
+#
+# We use an exclusion-by-name approach (rather than the kubebuilder-default
+# "** + selective re-include" pattern) because podman/buildah resolve the
+# directory glob `api/` against the result of the dockerignore filter, and
+# the re-include pattern `!**/*.go` doesn't preserve the enclosing
+# directories for them.
 
-# Re-include Go source files (but not *_test.go)
-!**/*.go
+.git
+.github
+bin
+charts
+config
+docs
+dist
+release
+hack
+test
+testdata
+
+# Editor / OS noise
+.idea
+.vscode
+.DS_Store
+
+# Test files are not needed for image builds.
 **/*_test.go
-
-# Re-include Go module files
-!go.mod
-!go.sum
+**/testdata

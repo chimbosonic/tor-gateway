@@ -13,6 +13,11 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-latest
+    # Force the Makefile to use docker even though local dev defaults to
+    # podman. GitHub-hosted ubuntu-latest ships docker; kind's
+    # `load docker-image` resolves images from docker's local store.
+    env:
+      CONTAINER_TOOL: docker
     steps:
       - name: Clone the code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
