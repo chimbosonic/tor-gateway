@@ -6,7 +6,7 @@ Drop in a `Gateway` of class `tor-gateway` and one or more `HTTPRoute`s, and the
 
 ## Status
 
-Pre-alpha. See [the design plan](https://github.com/chimbosonic/tor-gateway/blob/main/docs/PLAN.md) and [`SECURITY.md`](./SECURITY.md).
+Pre-alpha. See [the design plan](./docs/PLAN.md) and [`SECURITY.md`](./SECURITY.md).
 
 ## Quickstart
 
