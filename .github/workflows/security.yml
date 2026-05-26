@@ -65,11 +65,18 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
-          scanners: vuln,secret,config
+          # `config` is the legacy name for misconfig; keep it for action compatibility.
+          scanners: vuln,secret,misconfig
           severity: HIGH,CRITICAL
           format: sarif
           output: trivy.sarif
           exit-code: "1"
+          # Skip the Helm chart: Trivy's built-in helm scanner renders templates
+          # against Kubernetes v1.20.0 by default, but our chart pins
+          # kubeVersion >= 1.30.0-0, so the render aborts and the whole scan
+          # exits non-zero. The chart itself is exercised by the dedicated
+          # `chart` workflow (helm lint + kubeconform against current schemas).
+          skip-dirs: charts
       - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@v3

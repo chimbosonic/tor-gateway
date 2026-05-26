@@ -1,6 +1,6 @@
 module github.com/chimbosonic/tor-gateway
 
-go 1.25.8
+go 1.26.0
 
 require (
 	github.com/onsi/ginkgo/v2 v2.28.0

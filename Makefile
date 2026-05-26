@@ -122,8 +122,8 @@ test-conformance: setup-test-e2e manifests generate fmt vet ## Run the upstream 
 	  -args \
 	    -gateway-class=tor-gateway \
 	    -supported-features=Gateway \
-	    -implementation-name=tor-gateway \
-	    -implementation-organization=chimbosonic \
+	    -project=tor-gateway \
+	    -organization=chimbosonic \
 	    -conformance-profiles=GATEWAY-HTTP \
 	    -allow-crds-mismatch
 	$(MAKE) cleanup-test-e2e
@@ -168,9 +168,12 @@ image-router:
 image-obrefresh:
 	$(CONTAINER_TOOL) build --build-arg BINARY=obrefresh -t $(OBREFRESH_IMG) .
 
-# Back-compat single-image targets.
+# Back-compat single-image target. Honors IMG=... so callers (notably the
+# e2e suite's BeforeSuite, which invokes `make docker-build IMG=...`) tag
+# the image with their chosen name rather than the project default.
 .PHONY: docker-build
-docker-build: image-manager ## Build the manager image (alias for image-manager).
+docker-build: ## Build the manager image with the supplied IMG (or MANAGER_IMG default).
+	$(MAKE) image-manager MANAGER_IMG=$(IMG)
 
 .PHONY: docker-push
 docker-push: ## Push all three images.
