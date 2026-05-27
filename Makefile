@@ -238,7 +238,6 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
 	"$(KUSTOMIZE)" build config/default > dist/install.yaml
 
-# chart-sync requires yq v4 (mikefarah/yq); v3's `yq r` syntax silently emits wrong output.
 .PHONY: chart-smoke
 chart-smoke: setup-test-e2e install-gateway-api-crds ## Install the chart in kind and verify the operator reconciles a Gateway.
 	$(MAKE) docker-build IMG=$(MANAGER_IMG)
@@ -256,6 +255,7 @@ chart-smoke: setup-test-e2e install-gateway-api-crds ## Install the chart in kin
 	@echo "chart-smoke PASS: chart-installed operator reconciled the Gateway"
 	$(MAKE) cleanup-test-e2e
 
+# chart-sync requires yq v4 (mikefarah/yq); v3's `yq r` syntax silently emits wrong output.
 .PHONY: chart-sync
 chart-sync: ## Sync the Helm chart's RBAC rules + CRDs from config/ (source of truth).
 	@mkdir -p charts/tor-gateway/files/rbac charts/tor-gateway/files/crds
@@ -264,7 +264,12 @@ chart-sync: ## Sync the Helm chart's RBAC rules + CRDs from config/ (source of t
 	$(YQ) '.rules' config/rbac/metrics_auth_role.yaml     > charts/tor-gateway/files/rbac/metrics-auth-role-rules.yaml
 	$(YQ) '.rules' config/rbac/metrics_reader_role.yaml   > charts/tor-gateway/files/rbac/metrics-reader-role-rules.yaml
 	@rm -f charts/tor-gateway/files/crds/*.yaml
-	cp config/crd/bases/*.yaml charts/tor-gateway/files/crds/
+	# CRDs carry helm.sh/resource-policy=keep so `helm uninstall` won't delete them
+	# (which would cascade-delete users' policy custom resources).
+	@for f in config/crd/bases/*.yaml; do \
+		$(YQ) '.metadata.annotations."helm.sh/resource-policy" = "keep"' "$$f" \
+			> "charts/tor-gateway/files/crds/$$(basename "$$f")"; \
+	done
 
 ##@ Deployment
 
