@@ -30,6 +30,9 @@ spec:
             - --metrics-bind-address={{ if .Values.manager.metrics.enabled }}:{{ .Values.manager.metrics.port }}{{ else }}0{{ end }}
             - --metrics-secure={{ .Values.manager.metrics.secure }}
             - --zap-log-level={{ .Values.manager.logLevel }}
+            - --router-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.routerImage .) }}
+            - --tor-init-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.torInitImage .) }}
+            - --tor-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.torImage .) }}
           ports:
             - name: health
               containerPort: {{ .Values.manager.health.port }}

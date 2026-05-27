@@ -52,6 +52,11 @@ torRuntime:
     repository: ghcr.io/chimbosonic/tor-gateway-router
     tag: ""
     pullPolicy: IfNotPresent
+  torInitImage:
+    repository: ghcr.io/chimbosonic/tor-gateway-tor-init
+    tag: ""
+    pullPolicy: IfNotPresent
+  # Reserved for onionbalance HA (Mode B); not yet injected by the operator.
   obrefreshImage:
     repository: ghcr.io/chimbosonic/tor-gateway-obrefresh
     tag: ""
@@ -60,6 +65,7 @@ torRuntime:
     repository: ghcr.io/chimbosonic/tor
     tag: "0.4.9"
     pullPolicy: IfNotPresent
+  # Reserved for onionbalance HA (Mode B); not yet injected by the operator.
   onionbalanceImage:
     repository: ghcr.io/chimbosonic/onionbalance
     tag: "0.2-latest"

@@ -41,3 +41,9 @@ app.kubernetes.io/component: manager
 {{- $tag := default .Chart.AppVersion .Values.manager.image.tag -}}
 {{- printf "%s:%s" .Values.manager.image.repository $tag -}}
 {{- end -}}
+
+{{- define "tor-gateway.runtimeImage" -}}
+{{- $img := index . 0 -}}
+{{- $root := index . 1 -}}
+{{- printf "%s:%s" $img.repository (default $root.Chart.AppVersion $img.tag) -}}
+{{- end -}}

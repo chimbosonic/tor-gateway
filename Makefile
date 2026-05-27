@@ -252,6 +252,11 @@ chart-smoke: setup-test-e2e install-gateway-api-crds ## Install the chart in kin
 	# The operator can only set these conditions if its RBAC + the CRDs are present.
 	$(KUBECTL) -n default wait --for=jsonpath='{.status.conditions[?(@.type=="Accepted")].status}'=True   gateway/smoke --timeout=120s
 	$(KUBECTL) -n default wait --for=jsonpath='{.status.conditions[?(@.type=="Programmed")].status}'=True gateway/smoke --timeout=120s
+	@appver=$$($(HELM) show chart charts/tor-gateway | $(YQ) '.appVersion'); \
+		img=$$($(KUBECTL) -n default get pod -l torgateway.io/gateway=smoke \
+		-o jsonpath='{.items[0].spec.containers[?(@.name=="router")].image}'); \
+		echo "router image: $$img (expected …router:$$appver)"; \
+		case "$$img" in *tor-gateway-router:$$appver) ;; *) echo "ERROR: router image is $$img, expected …router:$$appver"; exit 1;; esac
 	@echo "chart-smoke PASS: chart-installed operator reconciled the Gateway"
 	$(MAKE) cleanup-test-e2e
 
