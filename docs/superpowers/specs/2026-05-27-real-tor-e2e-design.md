@@ -151,14 +151,33 @@ kubectl exec (curl sidecar)
 `AfterAll`: delete the namespace, GatewayClass, and `tor-client` pod
 (best-effort; errors ignored).
 
-## Risks / to resolve during implementation
+## Resolved during a debugging spike (2026-05-27)
 
-- **Tor + read-only rootfs as UID 65532 (operator side).** Tor validates
-  `DataDirectory` ownership/permissions and may reject an emptyDir owned by a
-  different UID or with group/other access. Candidate fixes: pod `fsGroup`,
-  torrc `DataDirectoryGroupReadable 1`, or having `tor-init` also prepare
-  `DataDirectory`. Drive this out while building the image; do not assume it
-  works.
+- **The per-Gateway Tor pod cannot start as configured today** — confirmed
+  empirically on a kind cluster with the built Tor image (Tor 0.4.9.8). Root
+  cause: the operator points `HiddenServiceDir` (`/var/lib/tor/hs`) and
+  `DataDirectory` (`/var/lib/tor/data`) at the emptyDir **mount roots**. The
+  pod sets `fsGroup: 65532`, which makes those `root:65532` (mode 2777) — the
+  **owner stays root**. Two failures result, both because group ownership is
+  not enough:
+  1. `tor-init`'s `FixPermissions` does `chmod 0700` on the mount root; as
+     UID 65532 (not owner) this is `EPERM` and the init container crashes.
+  2. Tor refuses to start: `/var/lib/tor/hs is not owned by this user (...,
+     65532) but by root (0)` → `Reading config failed`.
+- **Fix (validated):** use process-created subdirectories inside the
+  group-writable emptyDirs. With `HiddenServiceDir /var/lib/tor/hs/hs` and
+  `DataDirectory /var/lib/tor/data/data`: `tor-init`'s existing `MkdirAll(dst)`
+  creates the HS subdir owned by 65532 (parent is group-writable + setgid) so
+  its `chmod` succeeds, and Tor creates the DataDirectory subdir itself
+  (0700, owned 65532). A probe pod confirmed chmod EPERM on the mount root vs.
+  success on a self-created subdir; a Tor pod with the subdir paths
+  bootstrapped to 95% against the public Tor network and generated a working
+  `.onion`. **Operator change:** the two dir values in `gateway_resources.go`
+  (which feed both the rendered torrc and the `tor-init --dst` arg), plus the
+  golden torrc fixtures and `gateway_resources_test`. `tor-init`'s Go code is
+  unchanged.
+
+## Remaining risks
 - **Public Tor egress.** If the test environment blocks outbound Tor, the
   suite fails. Accepted: the test is in the gate and engineers re-run.
 - **Image-reference match.** Confirm the deployed operator actually consumes
