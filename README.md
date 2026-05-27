@@ -29,7 +29,7 @@ helm install tor-gateway oci://ghcr.io/chimbosonic/charts/tor-gateway --version 
 Or via the Helm repo:
 
 ```sh
-helm repo add tor-gateway https://chimbosonic.github.io/torGateway
+helm repo add tor-gateway https://chimbosonic.github.io/tor-gateway
 helm repo update
 helm install tor-gateway tor-gateway/tor-gateway --version X.Y.Z
 ```
@@ -51,10 +51,10 @@ Images are signed with [cosign](https://docs.sigstore.dev/cosign/overview/) via 
 
 ```sh
 cosign verify ghcr.io/chimbosonic/tor-gateway-manager:X.Y.Z \
-  --certificate-identity-regexp '^https://github.com/chimbosonic/torGateway' \
+  --certificate-identity-regexp '^https://github.com/chimbosonic/tor-gateway/\.github/workflows/release\.yml@' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 cosign verify-attestation --type spdxjson ghcr.io/chimbosonic/tor-gateway-manager:X.Y.Z \
-  --certificate-identity-regexp '^https://github.com/chimbosonic/torGateway' \
+  --certificate-identity-regexp '^https://github.com/chimbosonic/tor-gateway/\.github/workflows/release\.yml@' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -70,7 +70,7 @@ Pushing a `vX.Y.Z` tag triggers `.github/workflows/release.yml`, which builds an
    ```sh
    git checkout --orphan gh-pages && git rm -rf . && git commit --allow-empty -m "init gh-pages" && git push origin gh-pages
    ```
-2. After the first release, set the `ghcr.io/chimbosonic/tor-gateway-manager` and `ghcr.io/chimbosonic/charts/tor-gateway` packages to **public** so users can pull without authenticating.
+2. After the first release, set the ghcr packages to **public** so users can pull without authenticating: the chart (`ghcr.io/chimbosonic/charts/tor-gateway`) and every image the chart deploys (`tor-gateway-manager`, `tor-gateway-router`, `tor-gateway-tor-init`, and `tor`; plus `tor-gateway-obrefresh` once the HA path uses it). Leaving the runtime images private deploys the operator but leaves Tor pods in `ImagePullBackOff`.
 
 ## Features (v1 target)
 
