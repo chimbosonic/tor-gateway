@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
-# Build any of the project's binaries (manager, router, obrefresh) from one
-# Dockerfile. Pass --build-arg BINARY=<name> to select.
+# Build any of the project's binaries (manager, router, obrefresh, tor-init)
+# from one Dockerfile. Pass --build-arg BINARY=<name> to select.
 #
 # Built and tagged by `make images` for podman; equivalent under docker buildx.
 

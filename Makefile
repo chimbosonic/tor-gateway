@@ -21,6 +21,7 @@ IMAGE_TAG ?= dev
 MANAGER_IMG ?= $(REGISTRY)/tor-gateway-manager:$(IMAGE_TAG)
 ROUTER_IMG  ?= $(REGISTRY)/tor-gateway-router:$(IMAGE_TAG)
 OBREFRESH_IMG ?= $(REGISTRY)/tor-gateway-obrefresh:$(IMAGE_TAG)
+TORINIT_IMG ?= $(REGISTRY)/tor-gateway-tor-init:$(IMAGE_TAG)
 IMG ?= $(MANAGER_IMG)
 
 # When CONTAINER_TOOL is podman, point kind at podman too so the cluster
@@ -158,18 +159,19 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 ##@ Build
 
 .PHONY: build
-build: manifests generate fmt vet ## Build all binaries (manager, router, obrefresh).
+build: manifests generate fmt vet ## Build all binaries (manager, router, obrefresh, tor-init).
 	go build -trimpath -o bin/manager ./cmd/manager
 	go build -trimpath -o bin/router ./cmd/router
 	go build -trimpath -o bin/obrefresh ./cmd/obrefresh
+	go build -trimpath -o bin/tor-init ./cmd/tor-init
 
 .PHONY: run
 run: manifests generate fmt vet ## Run the manager from your host.
 	go run ./cmd/manager
 
-# Build all three container images. Defaults to podman; override via CONTAINER_TOOL=docker.
+# Build all container images. Defaults to docker; override via CONTAINER_TOOL=podman.
 .PHONY: images
-images: image-manager image-router image-obrefresh ## Build all container images.
+images: image-manager image-router image-obrefresh image-tor-init ## Build all container images.
 
 .PHONY: image-manager
 image-manager:
@@ -183,6 +185,10 @@ image-router:
 image-obrefresh:
 	$(CONTAINER_TOOL) build --build-arg BINARY=obrefresh -t $(OBREFRESH_IMG) .
 
+.PHONY: image-tor-init
+image-tor-init:
+	$(CONTAINER_TOOL) build --build-arg BINARY=tor-init -t $(TORINIT_IMG) .
+
 # Back-compat single-image target. Honors IMG=... so callers (notably the
 # e2e suite's BeforeSuite, which invokes `make docker-build IMG=...`) tag
 # the image with their chosen name rather than the project default.
@@ -191,10 +197,11 @@ docker-build: ## Build the manager image with the supplied IMG (or MANAGER_IMG d
 	$(MAKE) image-manager MANAGER_IMG=$(IMG)
 
 .PHONY: docker-push
-docker-push: ## Push all three images.
+docker-push: ## Push all images.
 	$(CONTAINER_TOOL) push $(MANAGER_IMG)
 	$(CONTAINER_TOOL) push $(ROUTER_IMG)
 	$(CONTAINER_TOOL) push $(OBREFRESH_IMG)
+	$(CONTAINER_TOOL) push $(TORINIT_IMG)
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
