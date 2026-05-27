@@ -18,9 +18,11 @@ Implemented and tested:
 - `internal/tor` — v3 `.onion` derivation, ed25519 key generation + Tor on-disk format, torrc rendering, permission enforcement, `mkp224o` Job rendering, client-auth `.auth` files (~88% coverage).
 - Reconcilers — `GatewayClass`, `Gateway` (provisions Secret/ConfigMap/Deployment/Service, publishes `.onion`, OwnerReferences cascade), `HTTPRoute` (parent status + listener `attachedRoutes`), `TorServicePolicy`, `TorClientAuthPolicy` (Strict mounts client keys; Audit logs). Gateway reconciler watches the policy CRDs.
 - `internal/router` — the in-pod router sidecar, fully wired. Pure routing core (path matching with Gateway API precedence, reverse-proxy handler, `HTTPRoute`→rules conversion, in-cluster Service resolver) plus `router.New()`: it watches the HTTPRoutes whose `parentRefs` target its Gateway via an informer and atomically rebuilds the route table on every add/update/delete. Unit-tested (route selection + fake-client sync) and covered by a package envtest (serves routes present at startup; picks up routes added later).
-- Tests/CI — envtest suites (controller + router), operator-side kind e2e, custom API-shape conformance, lint, govulncheck, gosec.
+- Data plane (**proven end-to-end over real Tor**) — the operator provisions a hardened, nonroot Tor pod: `tor-init` copies the ed25519 keys from the Secret mount and fixes permissions in process-owned subdirs of the emptyDirs (so Tor and the init container run under `fsGroup`/UID 65532 with a read-only rootfs), the curated Tor daemon image (`images/tor`) runs the hidden service, and the router sidecar runs under a per-Gateway ServiceAccount + namespaced Role/RoleBinding (least-privilege `httproutes` get/list/watch). A request to the published `.onion` routes by path to the correct in-cluster backend over a real Tor circuit.
+- Container images — `make images` builds the manager, router, obrefresh, tor-init, and the in-repo hardened Tor daemon image (`images/tor`).
+- Tests/CI — envtest suites (controller + router), operator-side kind e2e, real-Tor data-plane e2e, custom API-shape conformance, lint, govulncheck, gosec.
 
-Remaining work is tracked as the project backlog. Highlights, critical path to a functionally deployable operator: build real container images → real-Tor e2e. Independent features: onionbalance HA (`OnionBalancePolicy`), `mkp224o` vanity harvest, chart publish + cosign/SBOM, cross-namespace `ReferenceGrant`.
+The critical path to a functionally deployable operator — container images and a real-Tor data-plane e2e — is complete. Remaining work is the independent feature backlog: onionbalance HA (`OnionBalancePolicy`), `mkp224o` vanity harvest, chart publish + cosign/SBOM, cross-namespace `ReferenceGrant`.
 
 ---
 
@@ -147,7 +149,8 @@ internal/
   status/                # condition helpers
 config/                  # kubebuilder kustomize (crd, rbac, manager, samples)
 charts/tor-gateway/      # Helm chart
-test/{e2e,conformance}/  # kind e2e + custom API-shape conformance
+images/tor/              # hardened Tor daemon container image (Dockerfile)
+test/{e2e,conformance}/  # kind e2e (incl. real-Tor data plane) + API-shape conformance
 ```
 
 ---
@@ -159,7 +162,7 @@ test/{e2e,conformance}/  # kind e2e + custom API-shape conformance
 | Unit | `go test`, table-driven | onion/key/torrc/permission/router logic — pure, no cluster |
 | Integration | controller-runtime envtest | reconcilers vs a fake apiserver: child creation, OwnerReferences, status, CEL validation; router sidecar rebuilding its route table from live HTTPRoute changes |
 | Conformance | custom (`test/conformance`) | the **deployed** operator satisfies the Gateway API status contract (GatewayClass/Gateway Accepted+Programmed, Hostname `.onion` address, listener status) |
-| E2E | kind, operator-side | Gateway lifecycle, policy effects on torrc, HTTPRoute status, cascade delete |
+| E2E | kind, operator-side + real-Tor | Gateway lifecycle, policy effects on torrc, HTTPRoute status, cascade delete; **real-Tor data plane**: deploy a Gateway + two-backend HTTPRoute, fetch the published `.onion` over the public Tor network via an in-cluster SOCKS client, and assert path routing (`/`→A, `/api`→B) |
 | Security | govulncheck, gosec | CVE reachability + SAST on every PR |
 
 **Why not the upstream Gateway API conformance suite:** its GATEWAY-HTTP profile drives real L7 traffic to IP-reachable addresses. A Tor gateway publishes `.onion` addresses reachable only over Tor, and provisioning a Tor pod per conformance Gateway overwhelms a single-node cluster. We assert the slice of the contract we *can* satisfy instead.
