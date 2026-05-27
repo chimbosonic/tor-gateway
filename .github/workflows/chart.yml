@@ -5,10 +5,16 @@ on:
     branches: [main]
     paths:
       - "charts/**"
+      - "config/rbac/**"
+      - "config/crd/**"
+      - "Makefile"
       - ".github/workflows/chart.yml"
   pull_request:
     paths:
       - "charts/**"
+      - "config/rbac/**"
+      - "config/crd/**"
+      - "Makefile"
       - ".github/workflows/chart.yml"
 
 permissions: {}
@@ -26,6 +32,16 @@ jobs:
           persist-credentials: false
       - name: Setup Helm
         uses: azure/setup-helm@v4
+      - name: Install yq
+        run: |
+          # Pinned: chart-sync's output must match the yq version that generated the committed files/.
+          sudo curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.53.2/yq_linux_amd64 \
+            -o /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq
+      - name: Verify chart is in sync with config/
+        run: |
+          make chart-sync
+          git diff --exit-code charts/ \
+            || { echo "::error::charts/ is out of sync with config/. Run 'make chart-sync' and commit."; exit 1; }
       - name: Helm lint
         run: helm lint charts/tor-gateway
       - name: Render templates
