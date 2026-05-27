@@ -239,6 +239,23 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 	"$(KUSTOMIZE)" build config/default > dist/install.yaml
 
 # chart-sync requires yq v4 (mikefarah/yq); v3's `yq r` syntax silently emits wrong output.
+.PHONY: chart-smoke
+chart-smoke: setup-test-e2e install-gateway-api-crds ## Install the chart in kind and verify the operator reconciles a Gateway.
+	$(MAKE) docker-build IMG=$(MANAGER_IMG)
+	$(KIND) load docker-image $(MANAGER_IMG) --name $(KIND_CLUSTER)
+	$(HELM) upgrade --install tor-gateway charts/tor-gateway \
+		--namespace tor-gateway-system --create-namespace \
+		--set manager.image.repository=$(REGISTRY)/tor-gateway-manager \
+		--set manager.image.tag=$(IMAGE_TAG)
+	$(KUBECTL) -n tor-gateway-system wait --for=condition=Available deployment \
+		-l app.kubernetes.io/name=tor-gateway --timeout=120s
+	$(KUBECTL) apply -f test/chart/gateway.yaml
+	# The operator can only set these conditions if its RBAC + the CRDs are present.
+	$(KUBECTL) -n default wait --for=jsonpath='{.status.conditions[?(@.type=="Accepted")].status}'=True   gateway/smoke --timeout=120s
+	$(KUBECTL) -n default wait --for=jsonpath='{.status.conditions[?(@.type=="Programmed")].status}'=True gateway/smoke --timeout=120s
+	@echo "chart-smoke PASS: chart-installed operator reconciled the Gateway"
+	$(MAKE) cleanup-test-e2e
+
 .PHONY: chart-sync
 chart-sync: ## Sync the Helm chart's RBAC rules + CRDs from config/ (source of truth).
 	@mkdir -p charts/tor-gateway/files/rbac charts/tor-gateway/files/crds
@@ -284,6 +301,7 @@ $(LOCALBIN):
 ## Tool Binaries
 KUBECTL ?= kubectl
 KIND ?= kind
+HELM ?= helm
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
