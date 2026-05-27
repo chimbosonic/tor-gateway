@@ -1,0 +1,69 @@
+# Quickstart: expose a plain in-cluster web app as a v3 .onion hidden service.
+#
+# Prerequisites: the operator is installed and the `tor-gateway` GatewayClass
+# exists (the Helm chart ships it; `make install` / the conformance setup apply
+# config/samples/gatewayclass.yaml). Then:
+#
+#   kubectl apply -f config/samples/blog-gateway.yaml
+#   kubectl get gateway blog -o jsonpath='{.status.addresses[0].value}'
+#
+# The operator reconciles the Gateway into a Tor pod (tor-init + tor + router),
+# assigns the .onion address above, and the router forwards onion:80 to the
+# `blog` Service per the HTTPRoute.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: blog
+  namespace: default
+spec:
+  gatewayClassName: tor-gateway
+  listeners:
+  - name: onion
+    port: 80
+    protocol: torgateway.io/HiddenService
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blog
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: blog
+  template:
+    metadata:
+      labels:
+        app: blog
+    spec:
+      containers:
+      - name: web
+        image: traefik/whoami:v1.10.2
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blog
+  namespace: default
+spec:
+  selector:
+    app: blog
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: blog
+  namespace: default
+spec:
+  parentRefs:
+  - name: blog
+  rules:
+  - backendRefs:
+    - name: blog
+      port: 80
