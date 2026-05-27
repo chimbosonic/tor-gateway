@@ -6,9 +6,6 @@ metadata:
   labels: {{- include "tor-gateway.labels" . | nindent 4 }}
 spec:
   controllerName: {{ .Values.gatewayClass.controllerName }}
-  description: |
-    GatewayClass for tor-gateway. Gateways referencing this class will be
-    provisioned as Tor v3 hidden services. The .onion address is published
-    in Gateway.status.addresses (type: Hostname) once the Tor daemon
-    establishes introduction points.
+  # Gateway API caps GatewayClass.spec.description at 64 characters.
+  description: Exposes Gateways as Tor v3 hidden services (.onion).
 {{- end }}

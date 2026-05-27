@@ -38,11 +38,14 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+// testGwNamespace is the namespace of the fixtures sampleGateway builds.
+const testGwNamespace = "prod"
+
 func sampleGateway() *gwv1.Gateway {
 	return &gwv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "blog",
-			Namespace: "prod",
+			Namespace: testGwNamespace,
 			UID:       "11111111-2222-3333-4444-555555555555",
 		},
 		Spec: gwv1.GatewaySpec{
@@ -79,7 +82,7 @@ func TestBuildKeySecret_HasExpectedDataAndOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secret.Name != "blog-keys" || secret.Namespace != "prod" {
+	if secret.Name != "blog-keys" || secret.Namespace != testGwNamespace {
 		t.Fatalf("wrong meta: %s/%s", secret.Namespace, secret.Name)
 	}
 	if got := secret.Type; got != corev1.SecretTypeOpaque {
@@ -117,7 +120,7 @@ func TestBuildTorrcConfigMap_UsesPolicyValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cm.Name != "blog-torrc" || cm.Namespace != "prod" {
+	if cm.Name != "blog-torrc" || cm.Namespace != testGwNamespace {
 		t.Fatalf("wrong meta: %s/%s", cm.Namespace, cm.Name)
 	}
 	torrc := cm.Data["torrc"]
@@ -417,7 +420,7 @@ func TestBuildServiceAccount_NameNamespaceOwner(t *testing.T) {
 	if sa.Name != RouterRBACName("blog") {
 		t.Fatalf("name = %q, want %q", sa.Name, RouterRBACName("blog"))
 	}
-	if sa.Namespace != "prod" {
+	if sa.Namespace != testGwNamespace {
 		t.Fatalf("namespace = %q, want prod", sa.Namespace)
 	}
 	if len(sa.OwnerReferences) != 1 {
@@ -438,7 +441,7 @@ func TestBuildRole_GrantsHTTPRouteRead(t *testing.T) {
 	if role.Name != RouterRBACName("blog") {
 		t.Fatalf("name = %q, want %q", role.Name, RouterRBACName("blog"))
 	}
-	if role.Namespace != "prod" {
+	if role.Namespace != testGwNamespace {
 		t.Fatalf("namespace = %q, want prod", role.Namespace)
 	}
 	if len(role.OwnerReferences) != 1 || role.OwnerReferences[0].UID != gw.UID {
@@ -476,7 +479,7 @@ func TestBuildRoleBinding_BindsServiceAccountToRole(t *testing.T) {
 	if rb.Name != RouterRBACName("blog") {
 		t.Fatalf("name = %q, want %q", rb.Name, RouterRBACName("blog"))
 	}
-	if rb.Namespace != "prod" {
+	if rb.Namespace != testGwNamespace {
 		t.Fatalf("namespace = %q, want prod", rb.Namespace)
 	}
 	if len(rb.OwnerReferences) != 1 || rb.OwnerReferences[0].UID != gw.UID {
@@ -498,7 +501,7 @@ func TestBuildRoleBinding_BindsServiceAccountToRole(t *testing.T) {
 	if sub.Name != RouterRBACName("blog") {
 		t.Fatalf("Subject.Name = %q, want %q", sub.Name, RouterRBACName("blog"))
 	}
-	if sub.Namespace != "prod" {
+	if sub.Namespace != testGwNamespace {
 		t.Fatalf("Subject.Namespace = %q, want prod", sub.Namespace)
 	}
 }
