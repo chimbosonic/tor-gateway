@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+jobs:
+  images:
+    name: Build, sign, SBOM images
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Our component images version-lock to the release tag (tag: "" =>
+          # use the release version); `tor` is upstream software pinned
+          # independently and MUST match charts/tor-gateway/values.yaml.
+          - { name: tor-gateway-manager,  context: ".",          file: Dockerfile,            build_args: "BINARY=manager",   tag: "" }
+          - { name: tor-gateway-router,   context: ".",          file: Dockerfile,            build_args: "BINARY=router",    tag: "" }
+          - { name: tor-gateway-obrefresh,context: ".",          file: Dockerfile,            build_args: "BINARY=obrefresh", tag: "" }
+          - { name: tor-gateway-tor-init, context: ".",          file: Dockerfile,            build_args: "BINARY=tor-init",  tag: "" }
+          - { name: tor,                  context: "images/tor", file: images/tor/Dockerfile, build_args: "",                 tag: "0.4.9" }
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.6.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: ${{ matrix.build_args }}
+          tags: ghcr.io/chimbosonic/${{ matrix.name }}:${{ matrix.tag != '' && matrix.tag || steps.ver.outputs.version }}
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.0
+      - name: Sign image (keyless, by digest)
+        run: cosign sign --yes "ghcr.io/chimbosonic/${{ matrix.name }}@${{ steps.build.outputs.digest }}"
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: "ghcr.io/chimbosonic/${{ matrix.name }}@${{ steps.build.outputs.digest }}"
+          format: spdx-json
+          output-file: sbom.spdx.json
+      - name: Attest SBOM
+        run: cosign attest --yes --type spdxjson --predicate sbom.spdx.json "ghcr.io/chimbosonic/${{ matrix.name }}@${{ steps.build.outputs.digest }}"
+
+  chart:
+    name: Package, sign, publish chart
+    needs: images
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.0
+      - name: Install yq
+        run: |
+          sudo curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.53.2/yq_linux_amd64 \
+            -o /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq
+      - name: Stamp chart version
+        run: |
+          yq -i '.version = "${{ steps.ver.outputs.version }}" | .appVersion = "${{ steps.ver.outputs.version }}"' \
+            charts/tor-gateway/Chart.yaml
+      - name: Package, push (OCI), and sign the chart
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+          helm package charts/tor-gateway -d /tmp/chart
+          out=$(helm push "/tmp/chart/tor-gateway-${{ steps.ver.outputs.version }}.tgz" oci://ghcr.io/chimbosonic/charts 2>&1 | tee /dev/stderr)
+          digest=$(echo "$out" | grep -oE 'sha256:[0-9a-f]{64}' | head -1)
+          test -n "$digest" || { echo "could not parse pushed chart digest"; exit 1; }
+          cosign sign --yes "ghcr.io/chimbosonic/charts/tor-gateway@${digest}"
+      - name: Publish to GitHub Pages
+        uses: helm/chart-releaser-action@cae68fefc6b5f367a0275617c9f83181ba54714f # v1.7.0
+        with:
+          charts_dir: charts
+          skip_existing: true
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
