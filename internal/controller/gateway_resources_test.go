@@ -404,3 +404,114 @@ func TestBuildDeployment_ClientAuthDisabled_NoExtraVolume(t *testing.T) {
 		t.Fatalf("tor-init args should not include --client-auth-src when ClientAuth.Enabled=false")
 	}
 }
+
+// --- Router RBAC builders ---
+
+func TestBuildServiceAccount_NameNamespaceOwner(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	sa, err := BuildServiceAccount(gw, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sa.Name != RouterRBACName("blog") {
+		t.Fatalf("name = %q, want %q", sa.Name, RouterRBACName("blog"))
+	}
+	if sa.Namespace != "prod" {
+		t.Fatalf("namespace = %q, want prod", sa.Namespace)
+	}
+	if len(sa.OwnerReferences) != 1 {
+		t.Fatalf("expected 1 OwnerReference, got %d", len(sa.OwnerReferences))
+	}
+	if sa.OwnerReferences[0].UID != gw.UID {
+		t.Fatalf("owner UID = %s, want %s", sa.OwnerReferences[0].UID, gw.UID)
+	}
+}
+
+func TestBuildRole_GrantsHTTPRouteRead(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	role, err := BuildRole(gw, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if role.Name != RouterRBACName("blog") {
+		t.Fatalf("name = %q, want %q", role.Name, RouterRBACName("blog"))
+	}
+	if role.Namespace != "prod" {
+		t.Fatalf("namespace = %q, want prod", role.Namespace)
+	}
+	if len(role.OwnerReferences) != 1 || role.OwnerReferences[0].UID != gw.UID {
+		t.Fatalf("expected Gateway owner ref, got %+v", role.OwnerReferences)
+	}
+	if len(role.Rules) != 1 {
+		t.Fatalf("expected exactly 1 rule, got %d", len(role.Rules))
+	}
+	rule := role.Rules[0]
+	if !slices.Contains(rule.APIGroups, "gateway.networking.k8s.io") {
+		t.Fatalf("rule.APIGroups = %v, want [gateway.networking.k8s.io]", rule.APIGroups)
+	}
+	if !slices.Contains(rule.Resources, "httproutes") {
+		t.Fatalf("rule.Resources = %v, want [httproutes]", rule.Resources)
+	}
+	for _, v := range []string{"get", "list", "watch"} {
+		if !slices.Contains(rule.Verbs, v) {
+			t.Fatalf("rule.Verbs = %v, missing %q", rule.Verbs, v)
+		}
+	}
+	for _, v := range []string{"create", "update", "delete"} {
+		if slices.Contains(rule.Verbs, v) {
+			t.Fatalf("rule.Verbs = %v, must NOT contain %q", rule.Verbs, v)
+		}
+	}
+}
+
+func TestBuildRoleBinding_BindsServiceAccountToRole(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	rb, err := BuildRoleBinding(gw, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rb.Name != RouterRBACName("blog") {
+		t.Fatalf("name = %q, want %q", rb.Name, RouterRBACName("blog"))
+	}
+	if rb.Namespace != "prod" {
+		t.Fatalf("namespace = %q, want prod", rb.Namespace)
+	}
+	if len(rb.OwnerReferences) != 1 || rb.OwnerReferences[0].UID != gw.UID {
+		t.Fatalf("expected Gateway owner ref, got %+v", rb.OwnerReferences)
+	}
+	if rb.RoleRef.Kind != "Role" {
+		t.Fatalf("RoleRef.Kind = %q, want Role", rb.RoleRef.Kind)
+	}
+	if rb.RoleRef.Name != RouterRBACName("blog") {
+		t.Fatalf("RoleRef.Name = %q, want %q", rb.RoleRef.Name, RouterRBACName("blog"))
+	}
+	if len(rb.Subjects) != 1 {
+		t.Fatalf("expected 1 subject, got %d", len(rb.Subjects))
+	}
+	sub := rb.Subjects[0]
+	if sub.Kind != "ServiceAccount" {
+		t.Fatalf("Subject.Kind = %q, want ServiceAccount", sub.Kind)
+	}
+	if sub.Name != RouterRBACName("blog") {
+		t.Fatalf("Subject.Name = %q, want %q", sub.Name, RouterRBACName("blog"))
+	}
+	if sub.Namespace != "prod" {
+		t.Fatalf("Subject.Namespace = %q, want prod", sub.Namespace)
+	}
+}
+
+func TestBuildDeployment_UsesRouterServiceAccount(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	dep, err := BuildDeployment(gw, DefaultPolicy(), EffectiveClientAuth{}, sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dep.Spec.Template.Spec.ServiceAccountName != RouterRBACName("blog") {
+		t.Fatalf("ServiceAccountName = %q, want %q",
+			dep.Spec.Template.Spec.ServiceAccountName, RouterRBACName("blog"))
+	}
+}

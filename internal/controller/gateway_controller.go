@@ -16,6 +16,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -50,6 +51,8 @@ type GatewayReconciler struct {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=configmaps;services,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch
 
 func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("gateway", req.NamespacedName)
@@ -93,17 +96,28 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("ensure torrc configmap: %w", err)
 	}
 
-	// 3. Deployment.
+	// 3. Per-Gateway RBAC for the router sidecar (SA must exist before the pod).
+	if err := r.ensureServiceAccount(ctx, gw); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure service account: %w", err)
+	}
+	if err := r.ensureRole(ctx, gw); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure role: %w", err)
+	}
+	if err := r.ensureRoleBinding(ctx, gw); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure rolebinding: %w", err)
+	}
+
+	// 4. Deployment.
 	if _, err := r.ensureDeployment(ctx, gw, policy, auth); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure deployment: %w", err)
 	}
 
-	// 4. Headless Service.
+	// 5. Headless Service.
 	if _, err := r.ensureService(ctx, gw); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure service: %w", err)
 	}
 
-	// 5. Status: addresses + conditions + per-listener status.
+	// 6. Status: addresses + conditions + per-listener status.
 	if err := r.updateStatus(ctx, gw, kp); err != nil {
 		return ctrl.Result{}, fmt.Errorf("update status: %w", err)
 	}
@@ -291,6 +305,57 @@ func (r *GatewayReconciler) ensureDeployment(
 	return current, nil
 }
 
+func (r *GatewayReconciler) ensureServiceAccount(ctx context.Context, gw *gwv1.Gateway) error {
+	desired, err := BuildServiceAccount(gw, r.Scheme)
+	if err != nil {
+		return err
+	}
+	current := &corev1.ServiceAccount{}
+	current.Name = desired.Name
+	current.Namespace = desired.Namespace
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, current, func() error {
+		current.Labels = desired.Labels
+		current.OwnerReferences = desired.OwnerReferences
+		return nil
+	})
+	return err
+}
+
+func (r *GatewayReconciler) ensureRole(ctx context.Context, gw *gwv1.Gateway) error {
+	desired, err := BuildRole(gw, r.Scheme)
+	if err != nil {
+		return err
+	}
+	current := &rbacv1.Role{}
+	current.Name = desired.Name
+	current.Namespace = desired.Namespace
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, current, func() error {
+		current.Labels = desired.Labels
+		current.Rules = desired.Rules
+		current.OwnerReferences = desired.OwnerReferences
+		return nil
+	})
+	return err
+}
+
+func (r *GatewayReconciler) ensureRoleBinding(ctx context.Context, gw *gwv1.Gateway) error {
+	desired, err := BuildRoleBinding(gw, r.Scheme)
+	if err != nil {
+		return err
+	}
+	current := &rbacv1.RoleBinding{}
+	current.Name = desired.Name
+	current.Namespace = desired.Namespace
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, current, func() error {
+		current.Labels = desired.Labels
+		current.RoleRef = desired.RoleRef
+		current.Subjects = desired.Subjects
+		current.OwnerReferences = desired.OwnerReferences
+		return nil
+	})
+	return err
+}
+
 func (r *GatewayReconciler) ensureService(ctx context.Context, gw *gwv1.Gateway) (*corev1.Service, error) {
 	desired, err := BuildService(gw, r.Scheme)
 	if err != nil {
@@ -412,6 +477,9 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
+		Owns(&corev1.ServiceAccount{}).
+		Owns(&rbacv1.Role{}).
+		Owns(&rbacv1.RoleBinding{}).
 		Watches(&policyv1alpha1.TorServicePolicy{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForServicePolicy)).
 		Watches(&policyv1alpha1.TorClientAuthPolicy{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForClientAuthPolicy)).
 		Named("gateway").

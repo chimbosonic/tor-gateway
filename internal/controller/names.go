@@ -44,6 +44,7 @@ const (
 	torrcConfigSuffix = "-torrc"
 	deploymentSuffix  = ""
 	serviceSuffix     = ""
+	routerRBACSuffix  = "-router"
 	dataVolumeName    = "tor-data"
 	keysVolumeName    = "tor-keys"
 	configVolumeName  = "tor-config"
@@ -89,6 +90,10 @@ func DeploymentName(gw string) string { return gw + deploymentSuffix }
 
 // ServiceName returns the deterministic Service name for the Tor pod.
 func ServiceName(gw string) string { return gw + serviceSuffix }
+
+// RouterRBACName is the shared name of the per-Gateway ServiceAccount, Role,
+// and RoleBinding that grant the router sidecar read access to HTTPRoutes.
+func RouterRBACName(gw string) string { return gw + routerRBACSuffix }
 
 // ChildLabels returns the standard label set we put on every child resource
 // of a Gateway. Used both for SetControllerReference indirection and for
