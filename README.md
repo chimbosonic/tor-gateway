@@ -10,6 +10,10 @@ Pre-alpha. See [the design plan](./docs/PLAN.md) and [`SECURITY.md`](./SECURITY.
 
 ## Quickstart
 
+> Prerequisite: install the upstream Gateway API CRDs first (the chart ships
+> this operator's policy CRDs but not the Gateway API ones), e.g.
+> `make install-gateway-api-crds`.
+
 ```sh
 make kind-up
 helm install tor-gateway ./charts/tor-gateway
