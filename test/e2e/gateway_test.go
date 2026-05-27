@@ -11,12 +11,10 @@ You may obtain a copy of the License at
     http://www.apache.org/licenses/LICENSE-2.0
 */
 
-// Operator-side e2e assertions for tor-gateway. The Tor and router
-// containers in the per-Gateway pod use placeholder image references that
-// will not become Ready in the test cluster; we exercise *the operator*
-// (reconciler resource generation, status writes, OwnerReferences-driven
-// cleanup), not the data plane. A separate suite (deferred to v2) will
-// run a real Tor image and assert .onion connectivity.
+// Operator-side (control-plane) e2e assertions for tor-gateway: reconciler
+// resource generation, status writes, and OwnerReferences-driven cleanup.
+// The real-Tor data plane — provisioning a live hidden service and asserting
+// .onion connectivity + path routing — is covered in dataplane_test.go.
 
 package e2e
 
