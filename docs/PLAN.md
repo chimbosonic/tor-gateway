@@ -17,10 +17,10 @@ No existing operator (`bugfest/tor-controller`, `agabani/tor-operator`) implemen
 Implemented and tested:
 - `internal/tor` — v3 `.onion` derivation, ed25519 key generation + Tor on-disk format, torrc rendering, permission enforcement, `mkp224o` Job rendering, client-auth `.auth` files (~88% coverage).
 - Reconcilers — `GatewayClass`, `Gateway` (provisions Secret/ConfigMap/Deployment/Service, publishes `.onion`, OwnerReferences cascade), `HTTPRoute` (parent status + listener `attachedRoutes`), `TorServicePolicy`, `TorClientAuthPolicy` (Strict mounts client keys; Audit logs). Gateway reconciler watches the policy CRDs.
-- `internal/router` — tested HTTP routing core (path matching with Gateway API precedence, reverse-proxy handler, `HTTPRoute`→rules conversion, in-cluster Service resolver). **Not yet wired into `router.New()`** — see backlog.
-- Tests/CI — envtest suite, operator-side kind e2e, custom API-shape conformance, lint, govulncheck, gosec.
+- `internal/router` — the in-pod router sidecar, fully wired. Pure routing core (path matching with Gateway API precedence, reverse-proxy handler, `HTTPRoute`→rules conversion, in-cluster Service resolver) plus `router.New()`: it watches the HTTPRoutes whose `parentRefs` target its Gateway via an informer and atomically rebuilds the route table on every add/update/delete. Unit-tested (route selection + fake-client sync) and covered by a package envtest (serves routes present at startup; picks up routes added later).
+- Tests/CI — envtest suites (controller + router), operator-side kind e2e, custom API-shape conformance, lint, govulncheck, gosec.
 
-Remaining work is tracked as the project backlog. Highlights, critical path to a functionally deployable operator: wire `router.New()` → build real container images → real-Tor e2e. Independent features: onionbalance HA (`OnionBalancePolicy`), `mkp224o` vanity harvest, chart publish + cosign/SBOM, cross-namespace `ReferenceGrant`.
+Remaining work is tracked as the project backlog. Highlights, critical path to a functionally deployable operator: build real container images → real-Tor e2e. Independent features: onionbalance HA (`OnionBalancePolicy`), `mkp224o` vanity harvest, chart publish + cosign/SBOM, cross-namespace `ReferenceGrant`.
 
 ---
 
@@ -157,7 +157,7 @@ test/{e2e,conformance}/  # kind e2e + custom API-shape conformance
 | Layer | Tool | Covers |
 |---|---|---|
 | Unit | `go test`, table-driven | onion/key/torrc/permission/router logic — pure, no cluster |
-| Integration | controller-runtime envtest | reconcilers vs a fake apiserver: child creation, OwnerReferences, status, CEL validation |
+| Integration | controller-runtime envtest | reconcilers vs a fake apiserver: child creation, OwnerReferences, status, CEL validation; router sidecar rebuilding its route table from live HTTPRoute changes |
 | Conformance | custom (`test/conformance`) | the **deployed** operator satisfies the Gateway API status contract (GatewayClass/Gateway Accepted+Programmed, Hostname `.onion` address, listener status) |
 | E2E | kind, operator-side | Gateway lifecycle, policy effects on torrc, HTTPRoute status, cascade delete |
 | Security | govulncheck, gosec | CVE reachability + SAST on every PR |
