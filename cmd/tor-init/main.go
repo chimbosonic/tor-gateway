@@ -63,12 +63,19 @@ func run(src, dst, clientAuthSrc string) error {
 		return err
 	}
 	for _, entry := range entries {
-		if entry.IsDir() {
-			// Secret mounts may contain a `..data` symlink for atomicity;
-			// skip anything not a regular file or its symlink.
+		srcPath := filepath.Join(src, entry.Name())
+		// Secret/ConfigMap mounts expose a `..data` symlink to a timestamped
+		// dir plus the timestamped dir itself; os.Stat follows symlinks, so
+		// non-regular entries (those dirs) are skipped and only the projected
+		// key files are copied.
+		info, err := os.Stat(srcPath)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
 			continue
 		}
-		if err := copyFile(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name())); err != nil {
+		if err := copyFile(srcPath, filepath.Join(dst, entry.Name())); err != nil {
 			return err
 		}
 	}
