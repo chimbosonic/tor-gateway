@@ -1,7 +1,7 @@
 # Helm chart completion — design
 
 - **Date:** 2026-05-27
-- **Status:** Approved, pending implementation
+- **Status:** Implemented (chart RBAC + policy CRDs synced from `config/` via `make chart-sync`, CI drift guard in `chart.yml`, kind `chart-smoke` deploy test).
 - **Owner:** Alexis Lowe
 
 ## Context

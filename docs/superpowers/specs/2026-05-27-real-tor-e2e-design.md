@@ -1,7 +1,7 @@
 # Real-Tor data-plane e2e — design
 
 - **Date:** 2026-05-27
-- **Status:** Approved, pending implementation
+- **Status:** Implemented (`images/tor` daemon image, `test/e2e/dataplane_test.go`, subdir HS paths in `names.go`). As-built: the Tor image ref is `tor:0.4.9`, superseding the `0.4.8-latest` placeholder used throughout this doc.
 - **Owner:** Alexis Lowe
 
 ## Context

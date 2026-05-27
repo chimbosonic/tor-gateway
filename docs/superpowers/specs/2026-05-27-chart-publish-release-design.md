@@ -1,7 +1,7 @@
 # Release pipeline: publish + sign images and chart — design
 
 - **Date:** 2026-05-27
-- **Status:** Approved, pending implementation
+- **Status:** Implemented — shipped in `v0.1.0` (`.github/workflows/release.yml`: multi-arch images + chart, cosign-signed, SBOM; chart runtime-image wiring in `deployment.yaml`).
 - **Owner:** Alexis Lowe
 
 ## Context

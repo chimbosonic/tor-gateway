@@ -21,8 +21,9 @@ Implemented and tested:
 - Data plane (**proven end-to-end over real Tor**) — the operator provisions a hardened, nonroot Tor pod: `tor-init` copies the ed25519 keys from the Secret mount and fixes permissions in process-owned subdirs of the emptyDirs (so Tor and the init container run under `fsGroup`/UID 65532 with a read-only rootfs), the curated Tor daemon image (`images/tor`) runs the hidden service, and the router sidecar runs under a per-Gateway ServiceAccount + namespaced Role/RoleBinding (least-privilege `httproutes` get/list/watch). A request to the published `.onion` routes by path to the correct in-cluster backend over a real Tor circuit.
 - Container images — `make images` builds the manager, router, obrefresh, tor-init, and the in-repo hardened Tor daemon image (`images/tor`).
 - Tests/CI — envtest suites (controller + router), operator-side kind e2e, real-Tor data-plane e2e, custom API-shape conformance, lint, govulncheck, gosec.
+- Distribution — the Helm chart installs a functional operator (RBAC + policy CRDs synced from `config/` via `make chart-sync`, CI drift guard, kind deploy-smoke). A `vX.Y.Z` tag publishes multi-arch, cosign-signed images + chart (OCI `ghcr.io` + GitHub Pages) with SBOM attestations; first release `v0.1.0`.
 
-The critical path to a functionally deployable operator — container images and a real-Tor data-plane e2e — is complete. Remaining work is the independent feature backlog: onionbalance HA (`OnionBalancePolicy`), `mkp224o` vanity harvest, chart publish + cosign/SBOM, cross-namespace `ReferenceGrant`.
+The critical path to a functionally deployable operator — container images, a real-Tor data-plane e2e, and a published, signed chart — is complete. Remaining work is the independent feature backlog: onionbalance HA (`OnionBalancePolicy`), `mkp224o` vanity harvest, cross-namespace `ReferenceGrant`.
 
 ---
 
