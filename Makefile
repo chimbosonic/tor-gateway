@@ -23,10 +23,11 @@ ROUTER_IMG  ?= $(REGISTRY)/tor-gateway-router:$(IMAGE_TAG)
 OBREFRESH_IMG ?= $(REGISTRY)/tor-gateway-obrefresh:$(IMAGE_TAG)
 TORINIT_IMG ?= $(REGISTRY)/tor-gateway-tor-init:$(IMAGE_TAG)
 # Tor daemon image. Tor is upstream software versioned independently of our
-# component images, so it has its own tag (not IMAGE_TAG). The default must
+# component images, so it has its own tag (not IMAGE_TAG): the Tor minor that
+# images/tor's Alpine base packages (bump both together). The default must
 # match the operator's --tor-image default (cmd/manager/main.go) so a
 # kind-loaded image is used via PullIfNotPresent; override with TOR_IMAGE_TAG.
-TOR_IMAGE_TAG ?= 0.4.8-latest
+TOR_IMAGE_TAG ?= 0.4.9
 TOR_IMG ?= $(REGISTRY)/tor:$(TOR_IMAGE_TAG)
 IMG ?= $(MANAGER_IMG)
 

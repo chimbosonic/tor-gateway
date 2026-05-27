@@ -49,7 +49,7 @@ var _ = Describe("Tor data plane", Ordered, Label("dataplane"), func() {
 		// kind-loaded images.
 		buildAndLoadImage("image-router", "ghcr.io/chimbosonic/tor-gateway-router:dev")
 		buildAndLoadImage("image-tor-init", "ghcr.io/chimbosonic/tor-gateway-tor-init:dev")
-		buildAndLoadImage("image-tor", "ghcr.io/chimbosonic/tor:0.4.8-latest")
+		buildAndLoadImage("image-tor", "ghcr.io/chimbosonic/tor:0.4.9")
 
 		By("creating the data-plane namespace")
 		runOrSkipExisting("kubectl", "create", "ns", dataplaneNS)
@@ -173,7 +173,7 @@ spec:
   securityContext: { fsGroup: 65532 }
   containers:
   - name: tor
-    image: ghcr.io/chimbosonic/tor:0.4.8-latest
+    image: ghcr.io/chimbosonic/tor:0.4.9
     imagePullPolicy: IfNotPresent
     args: ["--SocksPort", "127.0.0.1:9050", "--DataDirectory", "/var/lib/tor/data/data", "--Log", "notice stdout"]
     securityContext: { runAsUser: 65532, runAsGroup: 65532 }

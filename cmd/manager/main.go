@@ -85,7 +85,7 @@ func main() {
 	// Runtime images injected into per-Gateway pods. Defaults are placeholders;
 	// the Helm chart wires these to the published images.
 	var torImage, routerImage, initImage string
-	flag.StringVar(&torImage, "tor-image", "ghcr.io/chimbosonic/tor:0.4.8-latest",
+	flag.StringVar(&torImage, "tor-image", "ghcr.io/chimbosonic/tor:0.4.9",
 		"container image of the tor daemon injected into per-Gateway pods")
 	flag.StringVar(&routerImage, "router-image", "ghcr.io/chimbosonic/tor-gateway-router:dev",
 		"container image of the in-pod HTTP router sidecar")

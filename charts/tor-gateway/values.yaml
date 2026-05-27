@@ -58,7 +58,7 @@ torRuntime:
     pullPolicy: IfNotPresent
   torImage:
     repository: ghcr.io/chimbosonic/tor
-    tag: "0.4.8-latest"
+    tag: "0.4.9"
     pullPolicy: IfNotPresent
   onionbalanceImage:
     repository: ghcr.io/chimbosonic/onionbalance
