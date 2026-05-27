@@ -56,7 +56,7 @@ a `vanityPrefix` has no effect. Concretely missing:
 | When does a prefix trigger a harvest? | **Creation-time only.** Honored only when `<gw>-keys` is absent. A prefix set against an existing key is ignored (event); the key is never regenerated. |
 | Harvest exceeds its deadline? | **Fail and stop.** `Programmed=False` + Warning event; no auto-retry, no random-key fallback. |
 | `mkp224o` image | **Build in-repo** (`images/mkp224o`), joining the signed/SBOM'd release matrix. |
-| Key handoff | **Promote via controller.** The Job writes a throwaway `<gw>-vanity-out`; the controller parses it and creates `<gw>-keys` via `BuildKeySecret`. |
+| Key handoff | **Promote via controller.** The controller pre-creates an empty `<gw>-vanity-out` (owner=Gateway); the harvest pod updates it in place; the controller parses it and creates `<gw>-keys` via `BuildKeySecret`. |
 | `finalize` image | **Dedicated `cmd/vanity-finalize` image** (one-cmd-per-image convention; cheap cross-compiled Go). |
 
 ## Design
@@ -71,9 +71,9 @@ a `vanityPrefix` has no effect. Concretely missing:
   `tor`).
 - **`cmd/vanity-finalize/main.go`** → image `tor-gateway-vanity-finalize` via the
   shared `Dockerfile` (`--build-arg BINARY=vanity-finalize`). Reads the three key
-  files from `--workdir` and creates the Secret `--secret-name` in `--namespace`
-  (Opaque, the verbatim files), stamping an OwnerReference from the
-  `--owner-uid`/`--owner-name` args, then exits. Joins the release matrix as a
+  files from `--workdir` and **updates** the pre-created Secret `--secret-name`
+  in `--namespace` with them (get → update), then exits. No owner-ref args — the
+  controller owns the Secret it pre-created. Joins the release matrix as a
   cross-compiled Go binary.
 - **Manager flags** — `--mkp224o-image`, `--vanity-finalize-image` (default to
   the released refs), `--vanity-active-deadline` (default `1h`). Extend
@@ -85,8 +85,9 @@ a `vanityPrefix` has no effect. Concretely missing:
 
 - **Per-Gateway vanity identity** — `BuildVanityServiceAccount` /
   `BuildVanityRole` / `BuildVanityRoleBinding`: SA `<gw>-vanity`, a Role granting
-  `create` on the single Secret `<gw>-vanity-out` only, and the binding; all
-  owner-referenced to the Gateway. Mirrors the existing router-SA builders.
+  `get;update;patch` on the single named Secret `<gw>-vanity-out` (RBAC
+  `resourceNames` constrains these verbs — unlike `create`), and the binding;
+  all owner-referenced to the Gateway. Mirrors the existing router-SA builders.
 - **Operator role** gains `batch`/`jobs`: `create;get;list;watch;delete`. Added
   to `config/rbac/role.yaml`, then `make chart-sync` propagates it to the chart
   (CI drift check covers it).
@@ -103,13 +104,15 @@ At the `ensureKeySecret` decision point:
           ├─ no  → FreshKeyPair() in-process (unchanged).
           └─ yes → harvest:
                    1. ensure <gw>-vanity SA/Role/RoleBinding (owner=Gateway)
+                      and the empty <gw>-vanity-out Secret (owner=Gateway)
                    2. ensure Job <gw>-vanity = tor.VanityJob{prefix, images,
                       deadline, SA, OutputSecretName=<gw>-vanity-out}
                       (owner=Gateway)
                    3. observe:
-                      • <gw>-vanity-out present → tor.ParseFiles → BuildKeySecret
-                        → Create <gw>-keys (owner+labels) → delete <gw>-vanity-out
-                        and the Job → continue provisioning
+                      • <gw>-vanity-out populated (has the key files) →
+                        tor.ParseFiles → BuildKeySecret → Create <gw>-keys
+                        (owner+labels) → delete <gw>-vanity-out and the Job →
+                        continue provisioning
                       • Job DeadlineExceeded/Failed → Programmed=False
                         (VanityHarvestFailed) + Warning event → stop
                       • else running → Programmed=False (VanityHarvestInProgress)
@@ -119,10 +122,10 @@ At the `ensureKeySecret` decision point:
 `ensureKeySecret` (or a wrapping step) returns a "harvest pending" signal so the
 rest of reconcile (ConfigMap / Deployment / Service) waits rather than erroring
 on a missing key. The reconciler adds `Owns(&batchv1.Job{})` so the Job's status
-transitions — and the appearance of `<gw>-vanity-out` (an owned Secret) —
-re-enqueue the Gateway. The throwaway Secret is owner-referenced to the Gateway
-(the controller passes the owner UID/name into the Job's finalize args) for
-cascade safety, and the controller deletes it explicitly after promotion.
+transitions — and updates to `<gw>-vanity-out` (an owned Secret) — re-enqueue the
+Gateway. The throwaway Secret is owner-referenced to the Gateway (the controller
+pre-creates it, so it sets the ref directly) for cascade safety, and the
+controller deletes it explicitly after promotion.
 
 ### D. Validation, status, recovery
 
@@ -174,9 +177,9 @@ cascade safety, and the controller deletes it explicitly after promotion.
   (vanity RBAC builders, image plumbing into the `VanityJob` call);
   `internal/controller/names.go` (`<gw>-vanity`, `<gw>-vanity-out`);
   `cmd/manager/main.go` (flags + `RuntimeImages`).
-- **Modify:** `internal/tor/vanity.go` — add owner fields to `VanityJobConfig`
-  and emit `--owner-uid`/`--owner-name` finalize args so the throwaway Secret
-  can be owner-referenced to the Gateway.
+- **Unchanged:** `internal/tor/vanity.go` — the `VanityJob` builder's finalize
+  args (`--workdir`/`--namespace`/`--secret-name`) already suffice; finalize
+  updates the pre-created, controller-owned Secret in place.
 - **Modify:** `api/v1alpha1/torservicepolicy_types.go` (ack `XValidation`) →
   regenerate `config/crd/bases/...` → `make chart-sync`.
 - **Modify:** `config/rbac/role.yaml` (`batch/jobs`) → `make chart-sync`.
