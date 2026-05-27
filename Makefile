@@ -22,6 +22,12 @@ MANAGER_IMG ?= $(REGISTRY)/tor-gateway-manager:$(IMAGE_TAG)
 ROUTER_IMG  ?= $(REGISTRY)/tor-gateway-router:$(IMAGE_TAG)
 OBREFRESH_IMG ?= $(REGISTRY)/tor-gateway-obrefresh:$(IMAGE_TAG)
 TORINIT_IMG ?= $(REGISTRY)/tor-gateway-tor-init:$(IMAGE_TAG)
+# Tor daemon image. Tor is upstream software versioned independently of our
+# component images, so it has its own tag (not IMAGE_TAG). The default must
+# match the operator's --tor-image default (cmd/manager/main.go) so a
+# kind-loaded image is used via PullIfNotPresent; override with TOR_IMAGE_TAG.
+TOR_IMAGE_TAG ?= 0.4.8-latest
+TOR_IMG ?= $(REGISTRY)/tor:$(TOR_IMAGE_TAG)
 IMG ?= $(MANAGER_IMG)
 
 # When CONTAINER_TOOL is podman, point kind at podman too so the cluster
@@ -171,7 +177,7 @@ run: manifests generate fmt vet ## Run the manager from your host.
 
 # Build all container images. Defaults to docker; override via CONTAINER_TOOL=podman.
 .PHONY: images
-images: image-manager image-router image-obrefresh image-tor-init ## Build all container images.
+images: image-manager image-router image-obrefresh image-tor-init image-tor ## Build all container images.
 
 .PHONY: image-manager
 image-manager:
@@ -189,6 +195,10 @@ image-obrefresh:
 image-tor-init:
 	$(CONTAINER_TOOL) build --build-arg BINARY=tor-init -t $(TORINIT_IMG) .
 
+.PHONY: image-tor
+image-tor:
+	$(CONTAINER_TOOL) build -t $(TOR_IMG) images/tor
+
 # Back-compat single-image target. Honors IMG=... so callers (notably the
 # e2e suite's BeforeSuite, which invokes `make docker-build IMG=...`) tag
 # the image with their chosen name rather than the project default.
@@ -202,6 +212,7 @@ docker-push: ## Push all images.
 	$(CONTAINER_TOOL) push $(ROUTER_IMG)
 	$(CONTAINER_TOOL) push $(OBREFRESH_IMG)
 	$(CONTAINER_TOOL) push $(TORINIT_IMG)
+	$(CONTAINER_TOOL) push $(TOR_IMG)
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
