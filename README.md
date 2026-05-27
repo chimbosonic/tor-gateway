@@ -16,10 +16,61 @@ Pre-alpha. See [the design plan](./docs/PLAN.md) and [`SECURITY.md`](./SECURITY.
 
 ```sh
 make kind-up
+```
+
+Published packages (OCI + Helm repo) exist once a `vX.Y.Z` release is cut (see [Releasing](#releasing)); before the first release, use the local-development install below.
+
+Install from the published OCI chart (recommended):
+
+```sh
+helm install tor-gateway oci://ghcr.io/chimbosonic/charts/tor-gateway --version X.Y.Z
+```
+
+Or via the Helm repo:
+
+```sh
+helm repo add tor-gateway https://chimbosonic.github.io/torGateway
+helm repo update
+helm install tor-gateway tor-gateway/tor-gateway --version X.Y.Z
+```
+
+For local development, the chart can also be installed directly:
+
+```sh
 helm install tor-gateway ./charts/tor-gateway
+```
+
+```sh
 kubectl apply -f config/samples/blog-gateway.yaml
 kubectl get gateway blog -o jsonpath='{.status.addresses[0].value}'
 ```
+
+## Verifying signatures
+
+Images are signed with [cosign](https://docs.sigstore.dev/cosign/overview/) via keyless signing in CI. To verify:
+
+```sh
+cosign verify ghcr.io/chimbosonic/tor-gateway-manager:X.Y.Z \
+  --certificate-identity-regexp '^https://github.com/chimbosonic/torGateway' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify-attestation --type spdxjson ghcr.io/chimbosonic/tor-gateway-manager:X.Y.Z \
+  --certificate-identity-regexp '^https://github.com/chimbosonic/torGateway' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The same verification applies to the other images: `tor-gateway-router`, `tor-gateway-obrefresh`, `tor-gateway-tor-init`, and `tor`.
+
+## Releasing
+
+Pushing a `vX.Y.Z` tag triggers `.github/workflows/release.yml`, which builds and signs the images, attaches SBOMs, and publishes the Helm chart to both OCI (`oci://ghcr.io/chimbosonic/charts/tor-gateway`) and GitHub Pages.
+
+**One-time setup:**
+
+1. Create an orphan `gh-pages` branch so the chart index has a home:
+   ```sh
+   git checkout --orphan gh-pages && git rm -rf . && git commit --allow-empty -m "init gh-pages" && git push origin gh-pages
+   ```
+2. After the first release, set the `ghcr.io/chimbosonic/tor-gateway-manager` and `ghcr.io/chimbosonic/charts/tor-gateway` packages to **public** so users can pull without authenticating.
 
 ## Features (v1 target)
 
