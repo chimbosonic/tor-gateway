@@ -98,6 +98,10 @@ jobs:
           digest=$(echo "$out" | grep -oE 'sha256:[0-9a-f]{64}' | head -1)
           test -n "$digest" || { echo "could not parse pushed chart digest"; exit 1; }
           cosign sign --yes "ghcr.io/chimbosonic/charts/tor-gateway@${digest}"
+      - name: Configure git identity (chart-releaser commits index.yaml)
+        run: |
+          git config --global user.name "$GITHUB_ACTOR"
+          git config --global user.email "$GITHUB_ACTOR@users.noreply.github.com"
       - name: Publish to GitHub Pages
         uses: helm/chart-releaser-action@cae68fefc6b5f367a0275617c9f83181ba54714f # v1.7.0
         with:
