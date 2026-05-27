@@ -1,0 +1,12 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "tor-gateway.fullname" . }}-manager
+  labels: {{- include "tor-gateway.labels" . | nindent 4 }}
+rules:
+{{- /* Injected verbatim from files/rbac/manager-role-rules.yaml, which `make
+       chart-sync` regenerates from config/rbac/role.yaml as a zero-indent
+       YAML list — keep that generator if you change this injection. */}}
+{{- .Files.Get "files/rbac/manager-role-rules.yaml" | nindent 0 }}
+{{- end }}
