@@ -1,0 +1,98 @@
+- apiGroups:
+    - ""
+  resources:
+    - configmaps
+    - secrets
+    - serviceaccounts
+    - services
+  verbs:
+    - create
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - apps
+  resources:
+    - deployments
+  verbs:
+    - create
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - gateway.networking.k8s.io
+  resources:
+    - gatewayclasses
+    - gateways
+    - httproutes
+  verbs:
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - gateway.networking.k8s.io
+  resources:
+    - gatewayclasses/status
+    - gateways/status
+    - httproutes/status
+  verbs:
+    - get
+    - patch
+    - update
+- apiGroups:
+    - policy.torgateway.io
+  resources:
+    - onionbalancepolicies
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - policy.torgateway.io
+  resources:
+    - onionbalancepolicies/finalizers
+  verbs:
+    - update
+- apiGroups:
+    - policy.torgateway.io
+  resources:
+    - onionbalancepolicies/status
+    - torclientauthpolicies/status
+    - torservicepolicies/status
+  verbs:
+    - get
+    - patch
+    - update
+- apiGroups:
+    - policy.torgateway.io
+  resources:
+    - torclientauthpolicies
+    - torservicepolicies
+  verbs:
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - rbac.authorization.k8s.io
+  resources:
+    - rolebindings
+    - roles
+  verbs:
+    - create
+    - get
+    - list
+    - patch
+    - update
+    - watch

@@ -238,6 +238,17 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
 	"$(KUSTOMIZE)" build config/default > dist/install.yaml
 
+# chart-sync requires yq v4 (mikefarah/yq); v3's `yq r` syntax silently emits wrong output.
+.PHONY: chart-sync
+chart-sync: ## Sync the Helm chart's RBAC rules + CRDs from config/ (source of truth).
+	@mkdir -p charts/tor-gateway/files/rbac charts/tor-gateway/files/crds
+	$(YQ) '.rules' config/rbac/role.yaml                  > charts/tor-gateway/files/rbac/manager-role-rules.yaml
+	$(YQ) '.rules' config/rbac/leader_election_role.yaml  > charts/tor-gateway/files/rbac/leader-election-role-rules.yaml
+	$(YQ) '.rules' config/rbac/metrics_auth_role.yaml     > charts/tor-gateway/files/rbac/metrics-auth-role-rules.yaml
+	$(YQ) '.rules' config/rbac/metrics_reader_role.yaml   > charts/tor-gateway/files/rbac/metrics-reader-role-rules.yaml
+	@rm -f charts/tor-gateway/files/crds/*.yaml
+	cp config/crd/bases/*.yaml charts/tor-gateway/files/crds/
+
 ##@ Deployment
 
 ifndef ignore-not-found
@@ -277,6 +288,7 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+YQ ?= yq
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.8.1

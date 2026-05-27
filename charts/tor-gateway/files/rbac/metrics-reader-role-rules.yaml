@@ -1,0 +1,4 @@
+- nonResourceURLs:
+    - "/metrics"
+  verbs:
+    - get
