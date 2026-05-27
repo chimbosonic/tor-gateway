@@ -40,22 +40,28 @@ const (
 // Resource naming conventions for child objects of a Gateway. Centralized
 // here so reconcilers and tests can agree without string-template drift.
 const (
-	keySecretSuffix    = "-keys"
-	torrcConfigSuffix  = "-torrc"
-	deploymentSuffix   = ""
-	serviceSuffix      = ""
-	dataVolumeName     = "tor-data"
-	keysVolumeName     = "tor-keys"
-	configVolumeName   = "tor-config"
-	hsDirVolumeName    = "tor-hsdir"
-	torContainerName   = "tor"
-	routerContainer    = "router"
-	initContainerName  = "tor-init"
-	managedByLabelKey  = "app.kubernetes.io/managed-by"
-	managedByLabelVal  = "tor-gateway"
-	gatewayLabelKey    = "torgateway.io/gateway"
-	hsDirMountPath     = "/var/lib/tor/hs"
-	dataMountPath      = "/var/lib/tor/data"
+	keySecretSuffix   = "-keys"
+	torrcConfigSuffix = "-torrc"
+	deploymentSuffix  = ""
+	serviceSuffix     = ""
+	dataVolumeName    = "tor-data"
+	keysVolumeName    = "tor-keys"
+	configVolumeName  = "tor-config"
+	hsDirVolumeName   = "tor-hsdir"
+	torContainerName  = "tor"
+	routerContainer   = "router"
+	initContainerName = "tor-init"
+	managedByLabelKey = "app.kubernetes.io/managed-by"
+	managedByLabelVal = "tor-gateway"
+	gatewayLabelKey   = "torgateway.io/gateway"
+	hsDirMountPath    = "/var/lib/tor/hs"
+	dataMountPath     = "/var/lib/tor/data"
+	// Tor and tor-init run as nonroot UID 65532. fsGroup leaves the emptyDir
+	// mount roots owned by root, but Tor and tor-init's chmod require dirs
+	// *owned* by 65532. So the working dirs are nested one level inside the
+	// group-writable mounts; the 65532 process creates them and thus owns them.
+	hsServiceDir       = hsDirMountPath + "/hs"  // actual HiddenServiceDir
+	torDataDir         = dataMountPath + "/data" // actual DataDirectory
 	keysMountPath      = "/etc/tor/keys"
 	configMountPath    = "/etc/tor"
 	loopbackTargetHost = "127.0.0.1"

@@ -355,6 +355,38 @@ func TestBuildDeployment_ClientAuth_AddsVolumeMountAndFlag(t *testing.T) {
 	}
 }
 
+func TestBuildTorrc_DirsAreProcessOwnedSubdirs(t *testing.T) {
+	cm, err := BuildTorrcConfigMap(sampleGateway(), DefaultPolicy(), EffectiveClientAuth{}, testScheme(t))
+	if err != nil {
+		t.Fatalf("BuildTorrcConfigMap: %v", err)
+	}
+	torrc := cm.Data["torrc"]
+
+	// The HiddenServiceDir and DataDirectory must be nested *inside* the
+	// emptyDir mount roots, not equal to them: fsGroup leaves the mount root
+	// owned by root, and Tor/tor-init require dirs owned by UID 65532, which
+	// only happens for subdirs the process creates itself.
+	if !strings.Contains(torrc, "HiddenServiceDir "+hsDirMountPath+"/") {
+		t.Fatalf("HiddenServiceDir must be a subdir of %q; got torrc:\n%s", hsDirMountPath, torrc)
+	}
+	if strings.Contains(torrc, "HiddenServiceDir "+hsDirMountPath+"\n") {
+		t.Fatalf("HiddenServiceDir must not equal the mount root %q", hsDirMountPath)
+	}
+	if !strings.Contains(torrc, "DataDirectory "+dataMountPath+"/") {
+		t.Fatalf("DataDirectory must be a subdir of %q; got torrc:\n%s", dataMountPath, torrc)
+	}
+	if strings.Contains(torrc, "DataDirectory "+dataMountPath+"\n") {
+		t.Fatalf("DataDirectory must not equal the mount root %q", dataMountPath)
+	}
+
+	// tor-init's --dst must equal the (subdir) HiddenServiceDir so it creates
+	// and perms exactly the directory Tor will use.
+	args := initContainerArgs(EffectiveClientAuth{})
+	if !slices.Contains(args, hsServiceDir) {
+		t.Fatalf("tor-init --dst should be %q; got args %v", hsServiceDir, args)
+	}
+}
+
 func TestBuildDeployment_ClientAuthDisabled_NoExtraVolume(t *testing.T) {
 	scheme := testScheme(t)
 	gw := sampleGateway()

@@ -127,8 +127,8 @@ func BuildTorrcConfigMap(
 	scheme *runtime.Scheme,
 ) (*corev1.ConfigMap, error) {
 	cfg := &tor.TorrcConfig{
-		HiddenServiceDir:   hsDirMountPath,
-		DataDirectory:      dataMountPath,
+		HiddenServiceDir:   hsServiceDir,
+		DataDirectory:      torDataDir,
 		LogLevel:           policy.LogLevel,
 		PoWDefensesEnabled: policy.PoWDefensesEnabled,
 		HiddenServicePort: tor.PortMapping{
@@ -138,7 +138,7 @@ func BuildTorrcConfigMap(
 		},
 	}
 	if auth.Enabled {
-		cfg.ClientAuthDir = hsDirMountPath + "/" + tor.AuthorizedClientsSubdir
+		cfg.ClientAuthDir = hsServiceDir + "/" + tor.AuthorizedClientsSubdir
 	}
 	rendered, err := tor.Render(cfg)
 	if err != nil {
@@ -323,7 +323,7 @@ func BuildDeployment(
 func initContainerArgs(auth EffectiveClientAuth) []string {
 	args := []string{
 		"--src", keysMountPath,
-		"--dst", hsDirMountPath,
+		"--dst", hsServiceDir,
 	}
 	if auth.Enabled {
 		args = append(args, "--client-auth-src", clientAuthMountPath)
