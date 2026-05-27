@@ -41,3 +41,6 @@ kubeconfig
 
 # Generated docs / SBOM / signatures kept under release/
 release/
+
+# SBOMs pulled locally by hack/read-sbom.sh
+sbom-*.spdx.json
