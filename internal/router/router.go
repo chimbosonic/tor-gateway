@@ -75,7 +75,13 @@ func New(ctx context.Context, cfg Config) (http.Handler, error) {
 		return nil, fmt.Errorf("router: install gateway-api scheme: %w", err)
 	}
 
-	c, err := cache.New(restCfg, cache.Options{Scheme: scheme})
+	c, err := cache.New(restCfg, cache.Options{
+		Scheme: scheme,
+		// Scope the informer to the Gateway's namespace so the sidecar needs
+		// only a namespaced Role (get/list/watch httproutes) rather than
+		// cluster-wide access.
+		DefaultNamespaces: map[string]cache.Config{cfg.GatewayNamespace: {}},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("router: build cache: %w", err)
 	}
