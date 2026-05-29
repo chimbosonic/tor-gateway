@@ -16,10 +16,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
 )
@@ -38,6 +42,7 @@ type HTTPRouteReconciler struct {
 
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=referencegrants,verbs=get;list;watch
 
 func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("httproute", req.NamespacedName)
@@ -82,6 +87,11 @@ func (r *HTTPRouteReconciler) buildRouteParentStatuses(
 	ctx context.Context,
 	route *gwv1.HTTPRoute,
 ) ([]gwv1.RouteParentStatus, error) {
+	// backendRefs are route-scoped (parent-independent), so resolve them once.
+	resolved, err := r.backendRefsPermitted(ctx, route)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]gwv1.RouteParentStatus, 0, len(route.Spec.ParentRefs))
 	for _, pr := range route.Spec.ParentRefs {
 		managed, listenerExists, err := r.parentManagedByUs(ctx, pr, route.Namespace)
@@ -104,10 +114,23 @@ func (r *HTTPRouteReconciler) buildRouteParentStatuses(
 			cond.Reason = string(gwv1.RouteReasonNoMatchingParent)
 			cond.Message = "ParentRef sectionName does not match any listener"
 		}
+		resolvedCond := metav1.Condition{
+			Type:               string(gwv1.RouteConditionResolvedRefs),
+			Status:             metav1.ConditionTrue,
+			Reason:             string(gwv1.RouteReasonResolvedRefs),
+			Message:            "All backendRefs resolved",
+			ObservedGeneration: route.Generation,
+			LastTransitionTime: metav1.Now(),
+		}
+		if !resolved {
+			resolvedCond.Status = metav1.ConditionFalse
+			resolvedCond.Reason = string(gwv1.RouteReasonRefNotPermitted)
+			resolvedCond.Message = "A cross-namespace backendRef is not permitted by any ReferenceGrant"
+		}
 		out = append(out, gwv1.RouteParentStatus{
 			ParentRef:      pr,
 			ControllerName: ControllerName,
-			Conditions:     []metav1.Condition{cond},
+			Conditions:     []metav1.Condition{cond, resolvedCond},
 		})
 	}
 	return out, nil
@@ -265,10 +288,71 @@ func parentRefMatches(pr gwv1.ParentReference, gwName, gwNS, routeNS string) boo
 	return string(pr.Name) == gwName && ns == gwNS
 }
 
+// backendRefsPermitted reports whether every cross-namespace backendRef in the
+// route is authorized by a ReferenceGrant in the backend's namespace.
+// Same-namespace backendRefs never require a grant.
+func (r *HTTPRouteReconciler) backendRefsPermitted(ctx context.Context, route *gwv1.HTTPRoute) (bool, error) {
+	for _, rule := range route.Spec.Rules {
+		for _, bref := range rule.BackendRefs {
+			ns := route.Namespace
+			if bref.Namespace != nil {
+				ns = string(*bref.Namespace)
+			}
+			if ns == route.Namespace {
+				continue
+			}
+			grants := &gwv1beta1.ReferenceGrantList{}
+			if err := r.List(ctx, grants, client.InNamespace(ns)); err != nil {
+				return false, err
+			}
+			ok := Allows(grants.Items,
+				FromRef{Group: GatewayAPIGroup, Kind: "HTTPRoute", Namespace: route.Namespace},
+				ToRef{Group: "", Kind: "Service", Name: string(bref.Name)})
+			if !ok {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+// httproutesForReferenceGrant enqueues HTTPRoutes in each namespace a changed
+// ReferenceGrant grants FROM (Kind=HTTPRoute), so their ResolvedRefs are
+// recomputed when grants are added or removed.
+func (r *HTTPRouteReconciler) httproutesForReferenceGrant(ctx context.Context, obj client.Object) []reconcile.Request {
+	grant, ok := obj.(*gwv1beta1.ReferenceGrant)
+	if !ok {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var reqs []reconcile.Request
+	for _, f := range grant.Spec.From {
+		if string(f.Group) != gwv1.GroupName || string(f.Kind) != "HTTPRoute" {
+			continue
+		}
+		ns := string(f.Namespace)
+		if _, dup := seen[ns]; dup {
+			continue
+		}
+		seen[ns] = struct{}{}
+		routes := &gwv1.HTTPRouteList{}
+		if err := r.List(ctx, routes, client.InNamespace(ns)); err != nil {
+			continue
+		}
+		for i := range routes.Items {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
+				Namespace: routes.Items[i].Namespace, Name: routes.Items[i].Name,
+			}})
+		}
+	}
+	return reqs
+}
+
 // SetupWithManager registers the reconciler.
 func (r *HTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&gwv1.HTTPRoute{}).
+		Watches(&gwv1beta1.ReferenceGrant{}, handler.EnqueueRequestsFromMapFunc(r.httproutesForReferenceGrant)).
 		Named("httproute").
 		Complete(r)
 }

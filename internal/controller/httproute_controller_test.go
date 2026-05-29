@@ -15,11 +15,13 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 )
 
 var _ = Describe("HTTPRoute reconciler", func() {
@@ -179,6 +181,90 @@ var _ = Describe("HTTPRoute reconciler", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, got)).To(Succeed())
 		Expect(got.Status.Listeners).To(HaveLen(1))
 		Expect(got.Status.Listeners[0].AttachedRoutes).To(BeNumerically("==", 2))
+	})
+})
+
+var _ = Describe("HTTPRoute cross-namespace ReferenceGrant", func() {
+	const gwNS = "default"
+	const backendNS = "rg-backends"
+
+	reconcileRoute := func(name string) error {
+		r := &HTTPRouteReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: gwNS, Name: name}})
+		return err
+	}
+
+	resolvedReason := func(routeName, gwName string) string {
+		route := &gwv1.HTTPRoute{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: gwNS, Name: routeName}, route)).To(Succeed())
+		for _, p := range route.Status.Parents {
+			if string(p.ParentRef.Name) != gwName || p.ControllerName != ControllerName {
+				continue
+			}
+			for _, c := range p.Conditions {
+				if c.Type == string(gwv1.RouteConditionResolvedRefs) {
+					return c.Reason
+				}
+			}
+		}
+		return ""
+	}
+
+	BeforeEach(func() {
+		_ = k8sClient.Create(ctx, &gwv1.GatewayClass{
+			ObjectMeta: metav1.ObjectMeta{Name: "tor-gateway-rg"},
+			Spec:       gwv1.GatewayClassSpec{ControllerName: ControllerName},
+		})
+		_ = k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: backendNS}})
+		_ = k8sClient.Create(ctx, &gwv1.Gateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "rg-gw", Namespace: gwNS},
+			Spec: gwv1.GatewaySpec{
+				GatewayClassName: "tor-gateway-rg",
+				Listeners:        []gwv1.Listener{{Name: "onion", Port: 80, Protocol: HiddenServiceProtocol}},
+			},
+		})
+	})
+
+	makeRoute := func(name string, backendNamespace *gwv1.Namespace) {
+		route := &gwv1.HTTPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: gwNS},
+			Spec: gwv1.HTTPRouteSpec{
+				CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "rg-gw"}}},
+				Rules: []gwv1.HTTPRouteRule{{
+					BackendRefs: []gwv1.HTTPBackendRef{{BackendRef: gwv1.BackendRef{
+						BackendObjectReference: gwv1.BackendObjectReference{Name: "app", Namespace: backendNamespace, Port: ptr.To(gwv1.PortNumber(80))},
+					}}},
+				}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, route)).To(Succeed())
+	}
+
+	It("denies a cross-namespace backendRef with no grant", func() {
+		bns := gwv1.Namespace(backendNS)
+		makeRoute("rg-route-deny", &bns)
+		Expect(reconcileRoute("rg-route-deny")).To(Succeed())
+		Expect(resolvedReason("rg-route-deny", "rg-gw")).To(Equal(string(gwv1.RouteReasonRefNotPermitted)))
+	})
+
+	It("permits a cross-namespace backendRef with a matching grant", func() {
+		bns := gwv1.Namespace(backendNS)
+		makeRoute("rg-route-allow", &bns)
+		Expect(k8sClient.Create(ctx, &gwv1beta1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "allow-routes", Namespace: backendNS},
+			Spec: gwv1beta1.ReferenceGrantSpec{
+				From: []gwv1beta1.ReferenceGrantFrom{{Group: gwv1.GroupName, Kind: "HTTPRoute", Namespace: gwNS}},
+				To:   []gwv1beta1.ReferenceGrantTo{{Group: "", Kind: "Service"}},
+			},
+		})).To(Succeed())
+		Expect(reconcileRoute("rg-route-allow")).To(Succeed())
+		Expect(resolvedReason("rg-route-allow", "rg-gw")).To(Equal(string(gwv1.RouteReasonResolvedRefs)))
+	})
+
+	It("permits a same-namespace backendRef with no grant", func() {
+		makeRoute("rg-route-samens", nil)
+		Expect(reconcileRoute("rg-route-samens")).To(Succeed())
+		Expect(resolvedReason("rg-route-samens", "rg-gw")).To(Equal(string(gwv1.RouteReasonResolvedRefs)))
 	})
 })
 
