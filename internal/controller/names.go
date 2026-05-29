@@ -40,11 +40,20 @@ const (
 // Resource naming conventions for child objects of a Gateway. Centralized
 // here so reconcilers and tests can agree without string-template drift.
 const (
-	keySecretSuffix   = "-keys"
-	torrcConfigSuffix = "-torrc"
-	deploymentSuffix  = ""
-	serviceSuffix     = ""
-	routerRBACSuffix  = "-router"
+	keySecretSuffix       = "-keys"
+	torrcConfigSuffix     = "-torrc"
+	deploymentSuffix      = ""
+	serviceSuffix         = ""
+	routerRBACSuffix      = "-router"
+	vanityRBACSuffix      = "-vanity"
+	vanityOutSecretSuffix = "-vanity-out"
+	// vanityFailedAnnotation records the prefix whose harvest exceeded its
+	// deadline so the controller does not relaunch a Job for it (this
+	// survives the Job's TTL GC). Cleared when the prefix changes.
+	vanityFailedAnnotation = "torgateway.io/vanity-failed"
+	// vanityPrefixLabel records the prefix a harvest Job targets, so the
+	// controller can detect a changed prefix and recreate the Job.
+	vanityPrefixLabel = "torgateway.io/vanity-prefix"
 	dataVolumeName    = "tor-data"
 	keysVolumeName    = "tor-keys"
 	configVolumeName  = "tor-config"
@@ -94,6 +103,14 @@ func ServiceName(gw string) string { return gw + serviceSuffix }
 // RouterRBACName is the shared name of the per-Gateway ServiceAccount, Role,
 // and RoleBinding that grant the router sidecar read access to HTTPRoutes.
 func RouterRBACName(gw string) string { return gw + routerRBACSuffix }
+
+// VanityRBACName is the shared name of the per-Gateway vanity ServiceAccount,
+// Role, RoleBinding, and Job used to harvest a vanity .onion key.
+func VanityRBACName(gw string) string { return gw + vanityRBACSuffix }
+
+// VanityOutSecretName is the throwaway Secret the vanity Job writes the
+// harvested keys into, before the controller promotes them into <gw>-keys.
+func VanityOutSecretName(gw string) string { return gw + vanityOutSecretSuffix }
 
 // ChildLabels returns the standard label set we put on every child resource
 // of a Gateway. Used both for SetControllerReference indirection and for
