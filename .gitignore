@@ -6,6 +6,13 @@ bin/
 cover.out
 coverage.txt
 
+# Command binaries left at the repo root by `go build ./cmd/<name>`
+/manager
+/router
+/obrefresh
+/tor-init
+/vanity-finalize
+
 # Go
 vendor/
 go.work
