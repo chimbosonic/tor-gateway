@@ -1,3 +1,5 @@
+//go:build e2e
+
 /*
 Copyright 2026 Alexis Lowe.
 
@@ -7,8 +9,6 @@ You may obtain a copy of the License at
 
     http://www.apache.org/licenses/LICENSE-2.0
 */
-
-//go:build e2e
 
 package e2e
 
@@ -135,6 +135,10 @@ spec:
     command: ["sleep", "infinity"]
   volumes: [{ name: data, emptyDir: {} }]
 `, gwNS))
+
+		By("waiting for the Tor client pod to be Ready")
+		_, _ = utils.Run(exec.Command("kubectl", "-n", gwNS, "wait", "--for=condition=Ready",
+			"pod/tor-client", "--timeout=120s"))
 
 		By("control path /local routes (proves the circuit is live)")
 		Eventually(fetchOverTor("/local"), "8m", "15s").Should(Equal("local"))

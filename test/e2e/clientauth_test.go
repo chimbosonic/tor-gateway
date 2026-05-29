@@ -1,3 +1,5 @@
+//go:build e2e
+
 /*
 Copyright 2026 Alexis Lowe.
 
@@ -7,8 +9,6 @@ You may obtain a copy of the License at
 
     http://www.apache.org/licenses/LICENSE-2.0
 */
-
-//go:build e2e
 
 package e2e
 
@@ -158,22 +158,32 @@ spec:
 			return onion
 		}, "60s", "2s").Should(MatchRegexp(`^[a-z2-7]{56}\.onion$`))
 
-		By("creating the client-auth private key ConfigMap (mode 0600) for the authorized client")
+		By("creating the client-auth private key Secret for the authorized client")
 		addr := strings.TrimSuffix(onion, ".onion")
+		// A Secret (not ConfigMap): the kubelet applies fsGroup ownership to
+		// Secret volumes, so defaultMode 0440 + fsGroup 65532 makes the file
+		// group-readable by the tor process (uid/gid 65532). ConfigMap volumes
+		// stay root:root, leaving a 0600/0440 file unreadable by 65532.
 		applyYAML(fmt.Sprintf(`
 apiVersion: v1
-kind: ConfigMap
+kind: Secret
 metadata: { name: client-key, namespace: %[1]s }
-data:
+stringData:
   alice.auth_private: "%[2]s:descriptor:x25519:%[3]s"
 `, ns, addr, priv))
 
 		By("deploying the authorized Tor client (ClientOnionAuthDir mounted) and the unauthorized client")
 		authMount := `    - { name: authkeys, mountPath: /etc/tor-auth, readOnly: true }`
 		authVolume := `  - name: authkeys
-    configMap: { name: client-key, defaultMode: 0600 }`
+    secret: { secretName: client-key, defaultMode: 0440 }`
 		applyYAML(torClientPod("tor-auth", `, "--ClientOnionAuthDir", "/etc/tor-auth"`, authMount, authVolume))
 		applyYAML(torClientPod("tor-noauth", ``, ``, ``))
+
+		By("waiting for both Tor client pods to be Ready")
+		for _, pod := range []string{"tor-auth", "tor-noauth"} {
+			_, _ = utils.Run(exec.Command("kubectl", "-n", ns, "wait", "--for=condition=Ready",
+				"pod/"+pod, "--timeout=120s"))
+		}
 
 		By("authorized client reaches the service (proves circuit live AND auth passes)")
 		Eventually(fetchFrom("tor-auth", "/"), "8m", "15s").Should(Equal("hello"))

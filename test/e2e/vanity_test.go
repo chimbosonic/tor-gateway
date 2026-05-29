@@ -1,3 +1,5 @@
+//go:build e2e
+
 /*
 Copyright 2026 Alexis Lowe.
 
@@ -7,8 +9,6 @@ You may obtain a copy of the License at
 
     http://www.apache.org/licenses/LICENSE-2.0
 */
-
-//go:build e2e
 
 package e2e
 
@@ -39,6 +39,11 @@ var _ = Describe("Vanity harvest", Ordered, Label("vanity"), func() {
 	BeforeAll(func() {
 		buildAndLoadImage("image-mkp224o", "ghcr.io/chimbosonic/mkp224o:dev")
 		buildAndLoadImage("image-vanity-finalize", "ghcr.io/chimbosonic/tor-gateway-vanity-finalize:dev")
+		// The promoted Gateway also provisions a Tor Deployment; load its images
+		// so the pod runs and Programmed=True is reached (not just published).
+		buildAndLoadImage("image-router", "ghcr.io/chimbosonic/tor-gateway-router:dev")
+		buildAndLoadImage("image-tor-init", "ghcr.io/chimbosonic/tor-gateway-tor-init:dev")
+		buildAndLoadImage("image-tor", "ghcr.io/chimbosonic/tor:0.4.9")
 		_, _ = utils.Run(exec.Command("kubectl", "create", "ns", ns))
 		applyYAML(fmt.Sprintf(`
 apiVersion: gateway.networking.k8s.io/v1

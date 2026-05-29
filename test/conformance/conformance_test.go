@@ -220,6 +220,13 @@ func TestRouteResolvedRefsContract(t *testing.T) {
 			t.Fatalf("create namespace %s: %v", name, err)
 		}
 	}
+	// Delete the namespaces (cascades Gateway/HTTPRoute/ReferenceGrant) so a
+	// re-run doesn't see a leftover grant and immediately observe ResolvedRefs=True.
+	t.Cleanup(func() {
+		for _, name := range []string{routeNS, backendNS} {
+			_ = c.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}})
+		}
+	})
 
 	gw := &gwv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "rg-gw", Namespace: routeNS},
