@@ -56,6 +56,16 @@ torRuntime:
     repository: ghcr.io/chimbosonic/tor-gateway-tor-init
     tag: ""
     pullPolicy: IfNotPresent
+  mkp224oImage:
+    repository: ghcr.io/chimbosonic/mkp224o
+    tag: ""
+    pullPolicy: IfNotPresent
+  vanityFinalizeImage:
+    repository: ghcr.io/chimbosonic/tor-gateway-vanity-finalize
+    tag: ""
+    pullPolicy: IfNotPresent
+  # Max wall-clock a vanity harvest Job runs before failing (difficulty guard).
+  vanityActiveDeadline: "1h"
   # Reserved for onionbalance HA (Mode B); not yet injected by the operator.
   obrefreshImage:
     repository: ghcr.io/chimbosonic/tor-gateway-obrefresh

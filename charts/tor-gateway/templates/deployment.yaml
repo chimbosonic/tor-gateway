@@ -33,6 +33,9 @@ spec:
             - --router-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.routerImage .) }}
             - --tor-init-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.torInitImage .) }}
             - --tor-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.torImage .) }}
+            - --mkp224o-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.mkp224oImage .) }}
+            - --vanity-finalize-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.vanityFinalizeImage .) }}
+            - --vanity-active-deadline={{ .Values.torRuntime.vanityActiveDeadline }}
           ports:
             - name: health
               containerPort: {{ .Values.manager.health.port }}
