@@ -15,6 +15,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -101,17 +102,20 @@ func TestRulesForGateway_IgnoresForeignGroupParentRefs(t *testing.T) {
 	}
 }
 
+const localBackend = "local"
+
 // resolvedRoute builds an HTTPRoute with one same-ns backend ("local") and one
 // cross-ns backend ("remote" in namespace "other"), optionally with a
 // ResolvedRefs status condition for the named gateway parent.
-func resolvedRoute(routeNS, gwName string, status metav1.ConditionStatus, withCond bool) gwv1.HTTPRoute {
+func resolvedRoute(status metav1.ConditionStatus, withCond bool) gwv1.HTTPRoute {
+	const gwName = "gw"
 	r := gwv1.HTTPRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: routeNS},
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "gwns"},
 		Spec: gwv1.HTTPRouteSpec{
 			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: gwv1.ObjectName(gwName)}}},
 			Rules: []gwv1.HTTPRouteRule{{BackendRefs: []gwv1.HTTPBackendRef{
-				{BackendRef: gwv1.BackendRef{BackendObjectReference: gwv1.BackendObjectReference{Name: "local", Port: ptrPort(80)}}},
-				{BackendRef: gwv1.BackendRef{BackendObjectReference: gwv1.BackendObjectReference{Name: "remote", Namespace: nsPtr("other"), Port: ptrPort(80)}}},
+				{BackendRef: gwv1.BackendRef{BackendObjectReference: gwv1.BackendObjectReference{Name: localBackend, Port: ptr.To(gwv1.PortNumber(80))}}},
+				{BackendRef: gwv1.BackendRef{BackendObjectReference: gwv1.BackendObjectReference{Name: "remote", Namespace: ptr.To(gwv1.Namespace("other")), Port: ptr.To(gwv1.PortNumber(80))}}},
 			}}},
 		},
 	}
@@ -123,9 +127,6 @@ func resolvedRoute(routeNS, gwName string, status metav1.ConditionStatus, withCo
 	}
 	return r
 }
-
-func ptrPort(p int32) *gwv1.PortNumber { v := gwv1.PortNumber(p); return &v }
-func nsPtr(s string) *gwv1.Namespace   { v := gwv1.Namespace(s); return &v }
 
 func backendNames(rules []Rule) []string {
 	var out []string
@@ -140,27 +141,27 @@ func backendNames(rules []Rule) []string {
 func TestRulesForGatewayDropsUnresolvedCrossNS(t *testing.T) {
 	gw := types.NamespacedName{Namespace: "gwns", Name: "gw"}
 
-	ok := resolvedRoute("gwns", "gw", metav1.ConditionTrue, true)
+	ok := resolvedRoute(metav1.ConditionTrue, true)
 	if got := backendNames(rulesForGateway([]gwv1.HTTPRoute{ok}, gw)); len(got) != 2 {
 		t.Errorf("resolved: backends = %v, want both", got)
 	}
 
-	bad := resolvedRoute("gwns", "gw", metav1.ConditionFalse, true)
+	bad := resolvedRoute(metav1.ConditionFalse, true)
 	got := backendNames(rulesForGateway([]gwv1.HTTPRoute{bad}, gw))
-	if len(got) != 1 || got[0] != "local" {
+	if len(got) != 1 || got[0] != localBackend {
 		t.Errorf("unresolved: backends = %v, want [local]", got)
 	}
 
-	unknown := resolvedRoute("gwns", "gw", metav1.ConditionUnknown, true)
+	unknown := resolvedRoute(metav1.ConditionUnknown, true)
 	got = backendNames(rulesForGateway([]gwv1.HTTPRoute{unknown}, gw))
-	if len(got) != 1 || got[0] != "local" {
+	if len(got) != 1 || got[0] != localBackend {
 		t.Errorf("unknown condition: backends = %v, want [local]", got)
 	}
 
 	// Status value is irrelevant here: no ResolvedRefs condition is present at all.
-	none := resolvedRoute("gwns", "gw", metav1.ConditionTrue, false)
+	none := resolvedRoute(metav1.ConditionTrue, false)
 	got = backendNames(rulesForGateway([]gwv1.HTTPRoute{none}, gw))
-	if len(got) != 1 || got[0] != "local" {
+	if len(got) != 1 || got[0] != localBackend {
 		t.Errorf("missing condition: backends = %v, want [local]", got)
 	}
 }
