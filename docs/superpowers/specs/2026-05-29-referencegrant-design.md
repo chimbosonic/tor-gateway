@@ -15,12 +15,13 @@ ReferenceGrant is the Gateway API's opt-in consent mechanism: a resource in name
 ## Goals
 
 - Gate cross-namespace HTTPRoute `backendRefs` behind a ReferenceGrant, reflected in the route's `ResolvedRefs` status, and enforced in the data plane (no traffic to un-permitted cross-ns backends).
-- Enable cross-namespace `TorClientAuthPolicy.clientsSecretRef`, gated by a ReferenceGrant in the Secret's namespace.
+- Build a reusable ReferenceGrant evaluator that a future cross-namespace `clientsSecretRef` feature can share.
 - Keep the Tor data-plane pods (router sidecar) **least-privilege** — no new RBAC on them.
 - Fail closed: when permission is absent or not yet evaluated, deny the cross-namespace reference.
 
 ## Non-goals
 
+- Cross-namespace `TorClientAuthPolicy.clientsSecretRef` — **deferred to its own spec/plan.** The client-auth Secret is consumed as a volume mount (`gateway_resources.go:311`), and Kubernetes only mounts Secrets from the pod's own namespace. Supporting cross-namespace would require the operator to copy the source Secret into the Gateway's namespace and keep it synced/GC'd — a Secret-replication subsystem with its own security surface, out of scope here. The `Allows` evaluator built in this plan is intended for reuse there.
 - `OnionBalancePolicy.masterKeySecretRef` cross-namespace support — onionbalance HA is not yet implemented, so its grant path can't be exercised end-to-end. Out of scope.
 - `BackendNotFound` semantics (a backendRef whose Service does not exist). We only gate the **grant** (`RefNotPermitted`); existence checking is a separate concern.
 - Cross-namespace `parentRef` gating (HTTPRoute attaching to a Gateway in another namespace). Out of scope for this iteration.
@@ -54,16 +55,15 @@ Returns true iff some grant has a `spec.from` entry matching `from` exactly AND 
   - For each managed route + parent, evaluate every `backendRef` whose effective namespace differs from the route's namespace: `from = {gateway.networking.k8s.io, HTTPRoute, route-ns}`, `to = {"", Service, backendRef-name}`, grants listed from the backend's namespace. Set the per-parent `ResolvedRefs` condition: `status=True, reason=ResolvedRefs` when all cross-ns backendRefs are permitted (or there are none); `status=False, reason=RefNotPermitted` otherwise. Same-namespace backendRefs are always permitted.
 - **Router** (`internal/router/`): when converting an HTTPRoute to rules, include a backendRef whose namespace differs from the route's namespace **only if** the route's `ResolvedRefs` condition for this Gateway parent is `True`. Same-namespace backendRefs are always included. A rule left with no usable backend serves a 502 (consistent with an unavailable backend). No RBAC change.
 
-### C. clientsSecretRef — controller-side check
+### C. clientsSecretRef — deferred (future work)
 
-In `findEffectiveClientAuth` (`gateway_controller.go`): if `clientsSecretRef.Namespace` is set and differs from the policy's namespace, require a ReferenceGrant in the Secret's namespace (`from = {policy.torgateway.io, TorClientAuthPolicy, policy-ns}`, `to = {"", Secret, secret-name}`). Permitted → use the cross-namespace Secret (mount path unchanged). Denied → fail closed: do not mount it, set a `False/RefNotPermitted` condition on the policy's ancestor status and emit an event. Same-namespace refs behave as today.
+Cross-namespace `clientsSecretRef` is out of scope for this plan (see Non-goals). When taken up, it will reuse the `Allows` evaluator and additionally need a Secret-copy/sync/GC mechanism, since the client-auth Secret is volume-mounted (same-namespace only). No code in this plan touches `findEffectiveClientAuth`.
 
 ## Status & edge behavior
 
 - `ResolvedRefs` reasons used: `ResolvedRefs` (True) and `RefNotPermitted` (False). `BackendNotFound` is out of scope.
 - Deleting a grant flips affected routes to `RefNotPermitted`; the router drops the cross-ns backend on its next watch-driven rebuild. Re-adding the grant restores it.
 - Until the controller has evaluated a freshly-created cross-ns route, `ResolvedRefs` is unset and the router excludes the cross-ns backend (fail-closed). Same-ns backends route immediately.
-- A denied `clientsSecretRef` leaves the Tor service running without that client-auth Secret; the policy condition + event surface the denial (never silently enabled with an unauthorized Secret).
 
 ## Testing — TDD is mandatory
 
@@ -74,7 +74,6 @@ Every task in the implementation plan is **test-first**: write the failing test,
   - cross-ns backendRef with no grant → `ResolvedRefs=False/RefNotPermitted`; create a matching ReferenceGrant → reconcile → `ResolvedRefs=True`.
   - same-ns backendRef → `ResolvedRefs=True` with no grant present.
   - name-scoped grant (`to.name` set) permits only the named Service.
-  - `clientsSecretRef` cross-ns: denied (no grant) sets the policy `RefNotPermitted` condition and does not mount; granted mounts and enables auth.
 - **Router unit:** a cross-ns backendRef is dropped when the route's `ResolvedRefs` is not True, included when True; same-ns backendRef always included; a rule reduced to zero backends yields no route/502.
 
 ## Implementation surface (no flags, no chart changes)
@@ -82,7 +81,6 @@ Every task in the implementation plan is **test-first**: write the failing test,
 - Scheme: register `sigs.k8s.io/gateway-api/apis/v1beta1` in the manager (`cmd/manager/main.go`) and the envtest suite (`internal/controller/suite_test.go`) — currently only `apis/v1` (`gwv1.Install`) is registered. `ReferenceGrant` is served as `v1beta1` in gateway-api v1.5.1, so the watch/list must use `gwv1beta1.ReferenceGrant` (`v1beta1.ReferenceGrant` is a defined type based on `v1.ReferenceGrant`).
 - New: shared `Allows` evaluator (+ its unit test).
 - `internal/controller/httproute_controller.go`: ReferenceGrant watch + map func, backendRef evaluation, `ResolvedRefs` status, RBAC marker.
-- `internal/controller/gateway_controller.go`: cross-ns `clientsSecretRef` grant check in `findEffectiveClientAuth` + policy condition/event.
 - `internal/router/`: fail-closed cross-ns inclusion gated on `ResolvedRefs`.
 - `config/rbac/role.yaml` + chart RBAC: regenerated for `referencegrants` read (operator only; router RBAC unchanged).
 - Tests as above.
