@@ -32,12 +32,16 @@ import (
 var (
 	errHarvestPending = errors.New("vanity harvest pending")
 	errHarvestFailed  = errors.New("vanity harvest failed")
+	// errAwaitingVanityPolicy is returned for a keyless Gateway that opted in
+	// (await-vanity annotation) but has no matching vanityPrefix policy yet.
+	errAwaitingVanityPolicy = errors.New("awaiting vanity policy")
 )
 
 // Programmed=False condition reasons for the harvest lifecycle.
 const (
 	ReasonVanityHarvestInProgress = "VanityHarvestInProgress"
 	ReasonVanityHarvestFailed     = "VanityHarvestFailed"
+	ReasonAwaitingVanityPolicy    = "AwaitingVanityPolicy"
 )
 
 // runVanityHarvest drives the creation-time vanity flow. It returns

@@ -54,18 +54,23 @@ const (
 	// vanityPrefixLabel records the prefix a harvest Job targets, so the
 	// controller can detect a changed prefix and recreate the Job.
 	vanityPrefixLabel = "torgateway.io/vanity-prefix"
-	dataVolumeName    = "tor-data"
-	keysVolumeName    = "tor-keys"
-	configVolumeName  = "tor-config"
-	hsDirVolumeName   = "tor-hsdir"
-	torContainerName  = "tor"
-	routerContainer   = "router"
-	initContainerName = "tor-init"
-	managedByLabelKey = "app.kubernetes.io/managed-by"
-	managedByLabelVal = "tor-gateway"
-	gatewayLabelKey   = "torgateway.io/gateway"
-	hsDirMountPath    = "/var/lib/tor/hs"
-	dataMountPath     = "/var/lib/tor/data"
+	// awaitVanityAnnotation, when set to "true" on a Gateway, makes the
+	// operator wait for a vanityPrefix TorServicePolicy instead of generating
+	// a random key (which could never be re-vanitied). Closes the apply-order
+	// race deterministically regardless of when the policy is applied.
+	awaitVanityAnnotation = "torgateway.io/await-vanity"
+	dataVolumeName        = "tor-data"
+	keysVolumeName        = "tor-keys"
+	configVolumeName      = "tor-config"
+	hsDirVolumeName       = "tor-hsdir"
+	torContainerName      = "tor"
+	routerContainer       = "router"
+	initContainerName     = "tor-init"
+	managedByLabelKey     = "app.kubernetes.io/managed-by"
+	managedByLabelVal     = "tor-gateway"
+	gatewayLabelKey       = "torgateway.io/gateway"
+	hsDirMountPath        = "/var/lib/tor/hs"
+	dataMountPath         = "/var/lib/tor/data"
 	// Tor and tor-init run as nonroot UID 65532. fsGroup leaves the emptyDir
 	// mount roots owned by root, but Tor and tor-init's chmod require dirs
 	// *owned* by 65532. So the working dirs are nested one level inside the

@@ -179,6 +179,38 @@ var _ = Describe("Gateway vanity harvest", func() {
 		Expect(drainEvents(rec)).To(ContainElement(ContainSubstring("VanityHarvestFailed")))
 	})
 
+	It("waits without a key when await-vanity is set and no policy exists yet", func() {
+		gw := newGateway("van-await")
+		gw.Annotations = map[string]string{awaitVanityAnnotation: "true"}
+		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+		r, _ := makeReconciler()
+		Expect(reconcileGw(r, "van-await")).To(Succeed())
+
+		By("not creating a key Secret")
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: KeySecretName("van-await")}, &corev1.Secret{})).To(HaveOccurred())
+
+		By("reporting Programmed=False/AwaitingVanityPolicy")
+		fresh := &gwv1.Gateway{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "van-await"}, fresh)).To(Succeed())
+		Expect(conditionReason(fresh, string(gwv1.GatewayConditionProgrammed))).To(Equal(ReasonAwaitingVanityPolicy))
+
+		By("harvesting once the matching policy is created")
+		newVanityPolicy("tsp-van-await", "van-await", "abc")
+		Expect(reconcileGw(r, "van-await")).To(Succeed())
+		job := &batchv1.Job{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: VanityRBACName("van-await")}, job)).To(Succeed())
+		Expect(job.Labels[vanityPrefixLabel]).To(Equal("abc"))
+	})
+
+	It("still generates a random key for a plain keyless Gateway (no policy, no annotation)", func() {
+		newGateway("van-plain")
+		r, _ := makeReconciler()
+		Expect(reconcileGw(r, "van-plain")).To(Succeed())
+		key := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: KeySecretName("van-plain")}, key)).To(Succeed())
+		Expect(key.Data).To(HaveKey(tor.FileSecretKeyName))
+	})
+
 	It("ignores a vanity prefix when a key already exists", func() {
 		gw := newGateway("van-d")
 		// Pre-create a non-vanity key.

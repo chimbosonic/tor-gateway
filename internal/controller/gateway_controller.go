@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -104,6 +105,9 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		case errors.Is(err, errHarvestFailed):
 			return ctrl.Result{}, r.setProgrammingCondition(ctx, gw,
 				ReasonVanityHarvestFailed, "vanity harvest exceeded its deadline; choose a shorter vanityPrefix")
+		case errors.Is(err, errAwaitingVanityPolicy):
+			return ctrl.Result{}, r.setProgrammingCondition(ctx, gw,
+				ReasonAwaitingVanityPolicy, "awaiting a TorServicePolicy with a vanityPrefix (torgateway.io/await-vanity=true)")
 		default:
 			return ctrl.Result{}, fmt.Errorf("ensure key secret: %w", err)
 		}
@@ -259,6 +263,26 @@ func (r *GatewayReconciler) ensureKeySecret(
 		// one-shot Job; otherwise generate a random key in-process.
 		if policy.VanityPrefix != "" {
 			return r.runVanityHarvest(ctx, gw, policy.VanityPrefix)
+		}
+		// The cached policy lookup can be stale when a Gateway and its
+		// TorServicePolicy are applied together (informer lag). Re-check
+		// authoritatively against the API server before committing to a
+		// random key, so a same-apply vanity policy is honored.
+		reader := r.APIReader
+		if reader == nil { // unset in some unit tests; fall back to the cache
+			reader = r.Client
+		}
+		fresh, freshErr := r.effectivePolicyFrom(ctx, reader, gw)
+		if freshErr != nil {
+			return nil, nil, freshErr
+		}
+		if fresh.VanityPrefix != "" {
+			return r.runVanityHarvest(ctx, gw, fresh.VanityPrefix)
+		}
+		// No vanity policy. If the Gateway explicitly opted to wait for one,
+		// do not generate a random key (it could never be re-vanitied).
+		if await, _ := strconv.ParseBool(gw.Annotations[awaitVanityAnnotation]); await {
+			return nil, nil, errAwaitingVanityPolicy
 		}
 		kp, genErr := FreshKeyPair()
 		if genErr != nil {
