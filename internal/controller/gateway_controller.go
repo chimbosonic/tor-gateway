@@ -49,6 +49,8 @@ type GatewayReconciler struct {
 	Images         RuntimeImages
 	Recorder       record.EventRecorder
 	VanityDeadline time.Duration
+	// APIReader is a direct, uncached API-server reader (defeats informer lag).
+	APIReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch;update;patch
@@ -163,8 +165,15 @@ func (r *GatewayReconciler) gatewayClassManagedByUs(ctx context.Context, name st
 // for any unset fields. If multiple policies target the same Gateway,
 // the lexically-first by name wins (deterministic conflict resolution).
 func (r *GatewayReconciler) findEffectivePolicy(ctx context.Context, gw *gwv1.Gateway) (EffectiveServicePolicy, error) {
+	return r.effectivePolicyFrom(ctx, r.Client, gw)
+}
+
+// effectivePolicyFrom resolves the effective TorServicePolicy for gw using the
+// supplied reader (cached client on the hot path, uncached APIReader when a
+// stale read would be unsafe).
+func (r *GatewayReconciler) effectivePolicyFrom(ctx context.Context, reader client.Reader, gw *gwv1.Gateway) (EffectiveServicePolicy, error) {
 	list := &policyv1alpha1.TorServicePolicyList{}
-	if err := r.List(ctx, list, client.InNamespace(gw.Namespace)); err != nil {
+	if err := reader.List(ctx, list, client.InNamespace(gw.Namespace)); err != nil {
 		return DefaultPolicy(), err
 	}
 	var matched *policyv1alpha1.TorServicePolicy

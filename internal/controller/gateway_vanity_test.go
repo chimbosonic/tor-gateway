@@ -42,6 +42,7 @@ var _ = Describe("Gateway vanity harvest", func() {
 			Images:         RuntimeImages{Tor: "tor:t", Router: "r:t", TorInit: "i:t", Mkp224o: "mkp:t", VanityFinalize: "vf:t"},
 			Recorder:       rec,
 			VanityDeadline: time.Hour,
+			APIReader:      k8sClient,
 		}, rec
 	}
 

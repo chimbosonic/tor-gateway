@@ -221,6 +221,7 @@ func main() {
 		//nolint:staticcheck // record.EventRecorder API is used throughout the controller and its tests
 		Recorder:       mgr.GetEventRecorderFor("gateway"),
 		VanityDeadline: vanityDeadline,
+		APIReader:      mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "gateway")
 		os.Exit(1)
