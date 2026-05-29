@@ -14,6 +14,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 
 	corev1 "k8s.io/api/core/v1"
@@ -56,9 +57,7 @@ func main() {
 	if sec.Data == nil {
 		sec.Data = map[string][]byte{}
 	}
-	for k, v := range data {
-		sec.Data[k] = v
-	}
+	maps.Copy(sec.Data, data)
 	if err := c.Update(ctx, sec); err != nil {
 		fatal(err)
 	}

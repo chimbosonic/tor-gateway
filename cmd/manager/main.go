@@ -218,6 +218,7 @@ func main() {
 			Mkp224o:        mkp224oImage,
 			VanityFinalize: vanityFinalizeImage,
 		},
+		//nolint:staticcheck // record.EventRecorder API is used throughout the controller and its tests
 		Recorder:       mgr.GetEventRecorderFor("gateway"),
 		VanityDeadline: vanityDeadline,
 	}).SetupWithManager(mgr); err != nil {
