@@ -117,8 +117,11 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 	# cert-manager so its scaffolded webhook tests can run. tor-gateway
 	# has no admission webhooks, so cert-manager is dead weight that
 	# also adds ~1m of cluster setup and the occasional flaky install.
+	# -timeout 45m: several specs wait on real Tor hidden-service descriptor
+	# publish/lookup (~8m budget each), run serially; the default 10m would
+	# kill the binary mid-suite.
 	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) CERT_MANAGER_INSTALL_SKIP=true \
-		go test -tags=e2e ./test/e2e/ -v -ginkgo.v
+		go test -tags=e2e -timeout 45m ./test/e2e/ -v -ginkgo.v
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e
