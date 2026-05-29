@@ -15,6 +15,11 @@ WORKDIR /src
 RUN git clone --depth 1 --branch "${MKP224O_REF}" https://github.com/cathugger/mkp224o.git . \
     && ./autogen.sh \
     && ./configure \
+    # mkp224o's GNUmakefile hardcodes -march=native, which targets the build
+    # host's CPU. Under multi-arch CI cross-builds (QEMU) that bakes in
+    # instructions absent on real nodes, so the binary SIGILLs at runtime.
+    # Strip it for a portable per-arch baseline.
+    && sed -i 's/-march=native//g' GNUmakefile \
     && make
 
 FROM alpine:${ALPINE_VERSION}
