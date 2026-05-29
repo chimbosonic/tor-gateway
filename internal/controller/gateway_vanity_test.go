@@ -51,18 +51,23 @@ var _ = Describe("Gateway vanity harvest", func() {
 	}
 
 	BeforeEach(func() {
+		// Use a dedicated class name (not "tor-gateway", which the GatewayClass
+		// reconciler spec strict-creates) to avoid cross-spec collisions under
+		// randomized ordering.
 		gc := &gwv1.GatewayClass{
-			ObjectMeta: metav1.ObjectMeta{Name: "tor-gateway"},
+			ObjectMeta: metav1.ObjectMeta{Name: "tor-gateway-test"},
 			Spec:       gwv1.GatewayClassSpec{ControllerName: ControllerName},
 		}
-		_ = k8sClient.Create(ctx, gc)
+		if err := k8sClient.Create(ctx, gc); err != nil {
+			Expect(client_IgnoreAlreadyExists(err)).NotTo(HaveOccurred())
+		}
 	})
 
 	newGateway := func(name string) *gwv1.Gateway {
 		gw := &gwv1.Gateway{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 			Spec: gwv1.GatewaySpec{
-				GatewayClassName: "tor-gateway",
+				GatewayClassName: "tor-gateway-test",
 				Listeners: []gwv1.Listener{{
 					Name:     "onion",
 					Port:     80,
