@@ -35,6 +35,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
@@ -66,6 +67,8 @@ var _ = BeforeSuite(func() {
 	err = policyv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 	err = gwv1.Install(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+	err = gwv1beta1.Install(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
