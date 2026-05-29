@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -91,6 +92,15 @@ func main() {
 		"container image of the in-pod HTTP router sidecar")
 	flag.StringVar(&initImage, "tor-init-image", "ghcr.io/chimbosonic/tor-gateway-tor-init:dev",
 		"container image of the tor-init init container that prepares HiddenServiceDir")
+
+	var mkp224oImage, vanityFinalizeImage string
+	var vanityDeadline time.Duration
+	flag.StringVar(&mkp224oImage, "mkp224o-image", "ghcr.io/chimbosonic/mkp224o:dev",
+		"container image of the mkp224o vanity brute-forcer")
+	flag.StringVar(&vanityFinalizeImage, "vanity-finalize-image", "ghcr.io/chimbosonic/tor-gateway-vanity-finalize:dev",
+		"container image of the vanity-finalize container that writes harvested keys")
+	flag.DurationVar(&vanityDeadline, "vanity-active-deadline", time.Hour,
+		"max wall-clock a vanity harvest Job runs before failing (the difficulty guard)")
 
 	opts := zap.Options{
 		Development: true,
@@ -202,10 +212,14 @@ func main() {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Images: controller.RuntimeImages{
-			Tor:     torImage,
-			Router:  routerImage,
-			TorInit: initImage,
+			Tor:            torImage,
+			Router:         routerImage,
+			TorInit:        initImage,
+			Mkp224o:        mkp224oImage,
+			VanityFinalize: vanityFinalizeImage,
 		},
+		Recorder:       mgr.GetEventRecorderFor("gateway"),
+		VanityDeadline: vanityDeadline,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "gateway")
 		os.Exit(1)

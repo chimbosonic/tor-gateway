@@ -13,6 +13,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -20,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -40,8 +42,10 @@ import (
 // address in Gateway.status.
 type GatewayReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Images RuntimeImages
+	Scheme         *runtime.Scheme
+	Images         RuntimeImages
+	Recorder       record.EventRecorder
+	VanityDeadline time.Duration
 }
 
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch;update;patch
@@ -561,4 +565,12 @@ func equalListenerStatus(a, b []gwv1.ListenerStatus) bool {
 		}
 	}
 	return true
+}
+
+// event records a Kubernetes Event against obj when a Recorder is configured.
+// It is nil-safe so tests can construct the reconciler without a recorder.
+func (r *GatewayReconciler) event(obj runtime.Object, eventType, reason, message string) {
+	if r.Recorder != nil {
+		r.Recorder.Event(obj, eventType, reason, message)
+	}
 }

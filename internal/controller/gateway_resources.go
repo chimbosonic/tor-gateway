@@ -32,10 +32,12 @@ import (
 // pods. Centralized here so the reconciler doesn't carry image strings and
 // the builders can be unit-tested with synthetic values.
 type RuntimeImages struct {
-	Tor      string
-	Router   string
-	TorInit  string
-	Operator string // currently unused; kept for forward compat (e.g. webhook)
+	Tor            string
+	Router         string
+	TorInit        string
+	Mkp224o        string
+	VanityFinalize string
+	Operator       string // currently unused; kept for forward compat (e.g. webhook)
 }
 
 // EffectiveServicePolicy carries the values from a TorServicePolicy after
