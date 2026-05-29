@@ -29,6 +29,8 @@ TORINIT_IMG ?= $(REGISTRY)/tor-gateway-tor-init:$(IMAGE_TAG)
 # kind-loaded image is used via PullIfNotPresent; override with TOR_IMAGE_TAG.
 TOR_IMAGE_TAG ?= 0.4.9
 TOR_IMG ?= $(REGISTRY)/tor:$(TOR_IMAGE_TAG)
+MKP224O_IMG ?= $(REGISTRY)/mkp224o:$(IMAGE_TAG)
+VANITYFINALIZE_IMG ?= $(REGISTRY)/tor-gateway-vanity-finalize:$(IMAGE_TAG)
 IMG ?= $(MANAGER_IMG)
 
 # When CONTAINER_TOOL is podman, point kind at podman too so the cluster
@@ -178,7 +180,7 @@ run: manifests generate fmt vet ## Run the manager from your host.
 
 # Build all container images. Defaults to docker; override via CONTAINER_TOOL=podman.
 .PHONY: images
-images: image-manager image-router image-obrefresh image-tor-init image-tor ## Build all container images.
+images: image-manager image-router image-obrefresh image-tor-init image-tor image-mkp224o image-vanity-finalize ## Build all container images.
 
 .PHONY: image-manager
 image-manager:
@@ -200,6 +202,14 @@ image-tor-init:
 image-tor:
 	$(CONTAINER_TOOL) build -t $(TOR_IMG) images/tor
 
+.PHONY: image-mkp224o
+image-mkp224o:
+	$(CONTAINER_TOOL) build -t $(MKP224O_IMG) images/mkp224o
+
+.PHONY: image-vanity-finalize
+image-vanity-finalize:
+	$(CONTAINER_TOOL) build --build-arg BINARY=vanity-finalize -t $(VANITYFINALIZE_IMG) .
+
 # Back-compat single-image target. Honors IMG=... so callers (notably the
 # e2e suite's BeforeSuite, which invokes `make docker-build IMG=...`) tag
 # the image with their chosen name rather than the project default.
@@ -214,6 +224,8 @@ docker-push: ## Push all images.
 	$(CONTAINER_TOOL) push $(OBREFRESH_IMG)
 	$(CONTAINER_TOOL) push $(TORINIT_IMG)
 	$(CONTAINER_TOOL) push $(TOR_IMG)
+	$(CONTAINER_TOOL) push $(MKP224O_IMG)
+	$(CONTAINER_TOOL) push $(VANITYFINALIZE_IMG)
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
