@@ -1,0 +1,51 @@
+# Vanity .onion Gateway.
+#
+# The torgateway.io/await-vanity annotation makes the operator WAIT for the
+# TorServicePolicy below instead of generating a random key — this guarantees
+# the vanity harvest even if the policy is observed after the Gateway (e.g.
+# applied together, or staged separately by GitOps). Without it, the operator
+# still re-checks the API server authoritatively, which covers the common
+# "applied together" case; the annotation makes it deterministic for all
+# orderings.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: vanity-demo
+  namespace: default
+  annotations:
+    torgateway.io/await-vanity: "true"
+spec:
+  gatewayClassName: tor-gateway
+  listeners:
+  - name: onion
+    port: 80
+    protocol: torgateway.io/HiddenService
+---
+apiVersion: policy.torgateway.io/v1alpha1
+kind: TorServicePolicy
+metadata:
+  name: vanity-demo
+  namespace: default
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: vanity-demo
+  # base32 charset only (a-z, 2-7). Keep it short: 2-3 chars harvest in
+  # seconds; >6 chars requires vanityAcknowledgeLongRunning: true.
+  vanityPrefix: "tor"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: vanity-demo
+  namespace: default
+spec:
+  parentRefs:
+  - name: vanity-demo
+  rules:
+  - matches:
+    - path: { type: PathPrefix, value: / }
+    backendRefs:
+    - name: my-http-service   # replace with your in-namespace HTTP Service
+      port: 80
