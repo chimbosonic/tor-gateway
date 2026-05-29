@@ -24,6 +24,16 @@
     - update
     - watch
 - apiGroups:
+    - batch
+  resources:
+    - jobs
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - watch
+- apiGroups:
     - gateway.networking.k8s.io
   resources:
     - gatewayclasses
