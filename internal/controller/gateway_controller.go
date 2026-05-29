@@ -12,10 +12,13 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -90,9 +93,18 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// 1. Keys (Secret). Generated once; never overwritten on subsequent reconciles.
-	secret, kp, err := r.ensureKeySecret(ctx, gw)
+	secret, kp, err := r.ensureKeySecret(ctx, gw, policy)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("ensure key secret: %w", err)
+		switch {
+		case errors.Is(err, errHarvestPending):
+			return ctrl.Result{}, r.setProgrammingCondition(ctx, gw,
+				ReasonVanityHarvestInProgress, "vanity .onion harvest in progress")
+		case errors.Is(err, errHarvestFailed):
+			return ctrl.Result{}, r.setProgrammingCondition(ctx, gw,
+				ReasonVanityHarvestFailed, "vanity harvest exceeded its deadline; choose a shorter vanityPrefix")
+		default:
+			return ctrl.Result{}, fmt.Errorf("ensure key secret: %w", err)
+		}
 	}
 	_ = secret // retained for explicit ownership trace; child objects use the name
 
@@ -227,13 +239,18 @@ func (r *GatewayReconciler) findEffectiveClientAuth(
 func (r *GatewayReconciler) ensureKeySecret(
 	ctx context.Context,
 	gw *gwv1.Gateway,
+	policy EffectiveServicePolicy,
 ) (*corev1.Secret, *tor.KeyPair, error) {
 	name := KeySecretName(gw.Name)
 	existing := &corev1.Secret{}
 	err := r.Get(ctx, client.ObjectKey{Namespace: gw.Namespace, Name: name}, existing)
 	switch {
 	case apierrors.IsNotFound(err):
-		// Generate fresh keys, then create the Secret.
+		// Creation-time only: a vanity prefix harvests the initial key via a
+		// one-shot Job; otherwise generate a random key in-process.
+		if policy.VanityPrefix != "" {
+			return r.runVanityHarvest(ctx, gw, policy.VanityPrefix)
+		}
 		kp, genErr := FreshKeyPair()
 		if genErr != nil {
 			return nil, nil, fmt.Errorf("generate keypair: %w", genErr)
@@ -250,14 +267,18 @@ func (r *GatewayReconciler) ensureKeySecret(
 		return nil, nil, err
 	}
 
-	// Secret exists; re-derive the in-memory KeyPair from its files so we
-	// can derive the .onion for status without re-generating keys.
 	kp, parseErr := tor.ParseFiles(
 		existing.Data[tor.FileSecretKeyName],
 		existing.Data[tor.FilePublicKeyName],
 	)
 	if parseErr != nil {
 		return nil, nil, fmt.Errorf("parse existing key Secret: %w", parseErr)
+	}
+	// A prefix requested after the key already exists is ignored — keys are
+	// never regenerated. Surface it so the user is not silently confused.
+	if policy.VanityPrefix != "" && !strings.HasPrefix(kp.OnionAddress().String(), policy.VanityPrefix) {
+		r.event(gw, corev1.EventTypeNormal, "VanityPrefixIgnored",
+			fmt.Sprintf("vanityPrefix %q ignored: a key already exists for this Gateway", policy.VanityPrefix))
 	}
 	return existing, kp, nil
 }
@@ -485,6 +506,7 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).
+		Owns(&batchv1.Job{}).
 		Watches(&policyv1alpha1.TorServicePolicy{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForServicePolicy)).
 		Watches(&policyv1alpha1.TorClientAuthPolicy{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForClientAuthPolicy)).
 		Named("gateway").
