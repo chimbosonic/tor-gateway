@@ -111,6 +111,25 @@ var _ = Describe("CRD validation", func() {
 			mustFail(obj, "too long")
 		})
 
+		It("rejects vanityPrefix over 6 chars without acknowledgement", func() {
+			obj := base("tsp-vanity-noack")
+			obj.Spec.VanityPrefix = "abcdefg" // 7 chars, no ack
+			mustFail(obj, "vanityAcknowledgeLongRunning")
+		})
+
+		It("accepts vanityPrefix over 6 chars with acknowledgement", func() {
+			obj := base("tsp-vanity-ack")
+			obj.Spec.VanityPrefix = "abcdefg"
+			obj.Spec.VanityAcknowledgeLongRunning = true
+			Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+		})
+
+		It("accepts a short vanityPrefix without acknowledgement", func() {
+			obj := base("tsp-vanity-short")
+			obj.Spec.VanityPrefix = "abc" // 3 chars
+			Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+		})
+
 		It("rejects an unknown logLevel", func() {
 			obj := base("tsp-bad-level")
 			obj.Spec.LogLevel = "verbose"

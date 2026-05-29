@@ -48,6 +48,7 @@ type KeyRotationSpec struct {
 // TorServicePolicySpec is the configuration for a Tor hidden service attached
 // to a Gateway. This is a Direct Policy (GEP-2648): it applies only to the
 // Gateway(s) referenced in TargetRefs and is not inherited by HTTPRoutes.
+// +kubebuilder:validation:XValidation:rule="!has(self.vanityPrefix) || size(self.vanityPrefix) <= 6 || (has(self.vanityAcknowledgeLongRunning) && self.vanityAcknowledgeLongRunning)",message="vanityPrefix longer than 6 characters requires vanityAcknowledgeLongRunning=true"
 type TorServicePolicySpec struct {
 	// TargetRefs is the list of Gateways this policy configures. Each
 	// reference must point at a `gateway.networking.k8s.io/v1` Gateway in

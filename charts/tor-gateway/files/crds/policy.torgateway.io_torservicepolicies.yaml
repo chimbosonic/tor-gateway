@@ -219,6 +219,9 @@ spec:
               required:
                 - targetRefs
               type: object
+              x-kubernetes-validations:
+                - message: vanityPrefix longer than 6 characters requires vanityAcknowledgeLongRunning=true
+                  rule: '!has(self.vanityPrefix) || size(self.vanityPrefix) <= 6 || (has(self.vanityAcknowledgeLongRunning) && self.vanityAcknowledgeLongRunning)'
             status:
               description: |-
                 TorServicePolicyStatus reflects the operator's view of policy acceptance,
