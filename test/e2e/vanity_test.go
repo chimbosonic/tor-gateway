@@ -58,7 +58,7 @@ spec: { controllerName: torgateway.io/gateway-controller }
 		_, _ = utils.Run(exec.Command("kubectl", "delete", "gatewayclass", gwClass, "--ignore-not-found"))
 	})
 
-	It("runs the mkp224o Job and publishes a vanity .onion with the requested prefix", func() {
+	It("harvests via the real mkp224o Job and publishes a vanity .onion with the requested prefix", func() {
 		applyYAML(fmt.Sprintf(`
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -75,15 +75,17 @@ kind: TorServicePolicy
 metadata: { name: van, namespace: %[1]s }
 spec:
   targetRefs: [{ group: gateway.networking.k8s.io, kind: Gateway, name: van }]
-  vanityPrefix: "a"
+  vanityPrefix: "abc"
 `, ns, gwClass))
 
-		By("the per-Gateway vanity Job is created")
-		Eventually(jpath("job/van-vanity", "{.metadata.name}"), "60s", "3s").Should(Equal("van-vanity"))
-
+		// The harvest Job is transient (the operator deletes it right after
+		// promoting the key), so we don't assert on it. The published address
+		// carrying the 3-char prefix is the end-to-end proof the real mkp224o
+		// Job ran and its key was promoted; a broken/SIGILL image would never
+		// publish, and a random key matching "abc" is ~1/32768.
 		By("the published .onion starts with the requested prefix")
 		Eventually(jpath("gateway/van", "{.status.addresses[0].value}"), "3m", "5s").
-			Should(MatchRegexp(`^a[a-z2-7]{55}\.onion$`))
+			Should(MatchRegexp(`^abc[a-z2-7]{53}\.onion$`))
 
 		By("Gateway Programmed=True")
 		Eventually(jpath("gateway/van", `{.status.conditions[?(@.type=="Programmed")].status}`), "60s", "3s").

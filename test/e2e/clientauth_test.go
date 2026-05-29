@@ -51,7 +51,27 @@ var _ = Describe("Client auth (Strict) over Tor", Ordered, Label("clientauth"), 
 		}
 	}
 
-	torClientPod := func(name, extraTorArgs, authMount, authVolume string) string {
+	// torClientPod renders a Tor SOCKS client. When authPrivate is non-empty the
+	// pod is "authorized": an init container (running as 65532) writes the
+	// .auth_private into an emptyDir subdir it owns, and tor points
+	// ClientOnionAuthDir at it. This emptyDir-owned-by-65532 dance is required
+	// because Tor refuses a ClientOnionAuthDir not owned by the tor uid, and
+	// Secret/ConfigMap volume dirs are owned by root (fsGroup only sets group).
+	torClientPod := func(name, authPrivate string) string {
+		torArgs := `"--SocksPort", "127.0.0.1:9050", "--DataDirectory", "/var/lib/tor/data/data", "--Log", "notice stdout"`
+		initSection, authMount, authVolume := "", "", ""
+		if authPrivate != "" {
+			torArgs += `, "--ClientOnionAuthDir", "/authdir/keys"`
+			initSection = fmt.Sprintf(`  initContainers:
+  - name: authinit
+    image: busybox:1.36
+    command: ["sh", "-c", "mkdir -p /authdir/keys && printf '%%s' '%s' > /authdir/keys/alice.auth_private && chmod 700 /authdir/keys && chmod 600 /authdir/keys/alice.auth_private"]
+    securityContext: { runAsUser: 65532, runAsGroup: 65532 }
+    volumeMounts: [{ name: authdir, mountPath: /authdir }]
+`, authPrivate)
+			authMount = `    - { name: authdir, mountPath: /authdir }`
+			authVolume = `  - { name: authdir, emptyDir: {} }`
+		}
 		return fmt.Sprintf(`
 apiVersion: v1
 kind: Pod
@@ -59,22 +79,22 @@ metadata: { name: %[1]s, namespace: %[2]s }
 spec:
   restartPolicy: Never
   securityContext: { fsGroup: 65532 }
-  containers:
+%[3]s  containers:
   - name: tor
     image: ghcr.io/chimbosonic/tor:0.4.9
     imagePullPolicy: IfNotPresent
-    args: ["--SocksPort", "127.0.0.1:9050", "--DataDirectory", "/var/lib/tor/data/data", "--Log", "notice stdout"%[3]s]
+    args: [%[4]s]
     securityContext: { runAsUser: 65532, runAsGroup: 65532 }
     volumeMounts:
     - { name: data, mountPath: /var/lib/tor/data }
-%[4]s
+%[5]s
   - name: curl
     image: curlimages/curl:8.11.1
     command: ["sleep", "infinity"]
   volumes:
   - { name: data, emptyDir: {} }
-%[5]s
-`, name, ns, extraTorArgs, authMount, authVolume)
+%[6]s
+`, name, ns, initSection, torArgs, authMount, authVolume)
 	}
 
 	BeforeAll(func() {
@@ -158,26 +178,11 @@ spec:
 			return onion
 		}, "60s", "2s").Should(MatchRegexp(`^[a-z2-7]{56}\.onion$`))
 
-		By("creating the client-auth private key Secret for the authorized client")
+		By("deploying the authorized Tor client (init writes its key) and the unauthorized client")
 		addr := strings.TrimSuffix(onion, ".onion")
-		// A Secret (not ConfigMap): the kubelet applies fsGroup ownership to
-		// Secret volumes, so defaultMode 0440 + fsGroup 65532 makes the file
-		// group-readable by the tor process (uid/gid 65532). ConfigMap volumes
-		// stay root:root, leaving a 0600/0440 file unreadable by 65532.
-		applyYAML(fmt.Sprintf(`
-apiVersion: v1
-kind: Secret
-metadata: { name: client-key, namespace: %[1]s }
-stringData:
-  alice.auth_private: "%[2]s:descriptor:x25519:%[3]s"
-`, ns, addr, priv))
-
-		By("deploying the authorized Tor client (ClientOnionAuthDir mounted) and the unauthorized client")
-		authMount := `    - { name: authkeys, mountPath: /etc/tor-auth, readOnly: true }`
-		authVolume := `  - name: authkeys
-    secret: { secretName: client-key, defaultMode: 0440 }`
-		applyYAML(torClientPod("tor-auth", `, "--ClientOnionAuthDir", "/etc/tor-auth"`, authMount, authVolume))
-		applyYAML(torClientPod("tor-noauth", ``, ``, ``))
+		authPrivate := fmt.Sprintf("%s:descriptor:x25519:%s", addr, priv)
+		applyYAML(torClientPod("tor-auth", authPrivate))
+		applyYAML(torClientPod("tor-noauth", ""))
 
 		By("waiting for both Tor client pods to be Ready")
 		for _, pod := range []string{"tor-auth", "tor-noauth"} {
