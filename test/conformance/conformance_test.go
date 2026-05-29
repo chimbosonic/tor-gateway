@@ -52,6 +52,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 )
 
 const (
@@ -74,6 +75,7 @@ func newClient(t *testing.T) client.Client {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(gwv1.Install(scheme))
+	utilruntime.Must(gwv1beta1.Install(scheme))
 	c, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		t.Fatalf("build client: %v", err)
@@ -183,4 +185,102 @@ func conditionStatus(conds []metav1.Condition, condType string) (string, bool) {
 		return strings.TrimSpace(string(c.Status) + " " + c.Reason), false
 	}
 	return "condition absent", false
+}
+
+// routeParentReason returns (reason, true) when the named condition on the
+// route's parent (matched by our ControllerName) has Status=True, else
+// (reason, false). Returns ("absent", false) when the condition is missing.
+func routeParentReason(route *gwv1.HTTPRoute, condType string) (string, bool) {
+	const controllerName = gwv1.GatewayController("torgateway.io/gateway-controller")
+	for _, p := range route.Status.Parents {
+		if p.ControllerName != controllerName {
+			continue
+		}
+		for _, c := range p.Conditions {
+			if c.Type == condType {
+				return c.Reason, c.Status == metav1.ConditionTrue
+			}
+		}
+	}
+	return "absent", false
+}
+
+func TestRouteResolvedRefsContract(t *testing.T) {
+	c := newClient(t)
+	ctx := context.Background()
+
+	const (
+		routeNS   = "tor-gateway-conformance-rg"
+		backendNS = "tor-gateway-conformance-rg-backend"
+		routeName = "rg-route"
+	)
+	for _, name := range []string{routeNS, backendNS} {
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		if err := c.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Fatalf("create namespace %s: %v", name, err)
+		}
+	}
+
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "rg-gw", Namespace: routeNS},
+		Spec: gwv1.GatewaySpec{
+			GatewayClassName: gatewayClassName,
+			Listeners:        []gwv1.Listener{{Name: "onion", Port: 80, Protocol: hiddenSvcProto}},
+		},
+	}
+	if err := c.Create(ctx, gw); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create Gateway: %v", err)
+	}
+
+	port := gwv1.PortNumber(80)
+	bns := gwv1.Namespace(backendNS)
+	route := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: routeName, Namespace: routeNS},
+		Spec: gwv1.HTTPRouteSpec{
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "rg-gw"}}},
+			Rules: []gwv1.HTTPRouteRule{{
+				BackendRefs: []gwv1.HTTPBackendRef{{BackendRef: gwv1.BackendRef{
+					BackendObjectReference: gwv1.BackendObjectReference{Name: "app", Namespace: &bns, Port: &port},
+				}}},
+			}},
+		},
+	}
+	if err := c.Create(ctx, route); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create HTTPRoute: %v", err)
+	}
+
+	waitCondition(t, func() (string, bool) {
+		got := &gwv1.HTTPRoute{}
+		if err := c.Get(ctx, client.ObjectKey{Name: routeName, Namespace: routeNS}, got); err != nil {
+			return "get route: " + err.Error(), false
+		}
+		reason, ok := routeParentReason(got, string(gwv1.RouteConditionResolvedRefs))
+		if ok || reason != "RefNotPermitted" {
+			return "want ResolvedRefs=False/RefNotPermitted, got reason=" + reason, false
+		}
+		return "", true
+	}, "ungated cross-ns backendRef should be RefNotPermitted")
+
+	grant := &gwv1beta1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "allow-routes", Namespace: backendNS},
+		Spec: gwv1beta1.ReferenceGrantSpec{
+			From: []gwv1beta1.ReferenceGrantFrom{{Group: gwv1.GroupName, Kind: "HTTPRoute", Namespace: gwv1beta1.Namespace(routeNS)}},
+			To:   []gwv1beta1.ReferenceGrantTo{{Group: "", Kind: "Service"}},
+		},
+	}
+	if err := c.Create(ctx, grant); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create ReferenceGrant: %v", err)
+	}
+
+	waitCondition(t, func() (string, bool) {
+		got := &gwv1.HTTPRoute{}
+		if err := c.Get(ctx, client.ObjectKey{Name: routeName, Namespace: routeNS}, got); err != nil {
+			return "get route: " + err.Error(), false
+		}
+		reason, ok := routeParentReason(got, string(gwv1.RouteConditionResolvedRefs))
+		if !ok || reason != "ResolvedRefs" {
+			return "want ResolvedRefs=True, got reason=" + reason, false
+		}
+		return "", true
+	}, "granted cross-ns backendRef should be ResolvedRefs")
 }
