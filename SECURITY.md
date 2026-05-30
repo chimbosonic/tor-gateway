@@ -19,7 +19,7 @@ Please report security issues privately to `agl314@chimbosonic.com`. Do not open
 ### Adversary models considered
 
 1. **Cluster co-tenant** — another namespace tries to read a Gateway's key Secret or reroute traffic.
-   - Mitigations: per-namespace RBAC; operator never grants blanket `Secret` read. NetworkPolicy scoping is **not yet emitted by the operator** (tracked follow-up); scope ingress to the Tor pod (including its `MetricsPort`) with your own NetworkPolicy until then.
+   - Mitigations: per-namespace RBAC; operator never grants blanket `Secret` read. The operator emits a per-Gateway egress NetworkPolicy (v0.3.2) locking lateral movement to DNS, kube-apiserver, resolved HTTPRoute backend Services, and the public internet minus chart-supplied cluster pod CIDRs; scope inbound ingress to the Tor pod's `MetricsPort` with your own NetworkPolicy if you need to constrain scrape access.
 2. **Compromised backend Pod** — a Pod behind an HTTPRoute is breached.
    - Mitigations: the backend cannot read keys; the proxy sidecar only forwards to `backendRefs` resolved by the controller, not to arbitrary destinations chosen by the backend.
 3. **External attacker over Tor** — public attack against the `.onion`.
@@ -39,7 +39,8 @@ All pods produced by the operator:
 
 ### Known gaps
 
-- **NetworkPolicy is not yet emitted by the operator** (tracked follow-up). The Tor pod's `MetricsPort` exposes Prometheus-format counters (no key material, no descriptor content) on the pod IP; any in-cluster source can reach it until you scope ingress with your own NetworkPolicy or the operator-emitted policy ships.
+- **NetworkPolicy is opt-out per-Gateway** (v0.3.2). The operator emits a per-Gateway egress NetworkPolicy whitelisting DNS, kube-apiserver, the resolved HTTPRoute backend Services (cross-namespace gated by ReferenceGrant), and the public internet. The `clusterPodCIDRs` chart value MUST be set to your cluster's pod CIDR(s) for cluster-lateral lockdown to bite — without it, the broad public-internet rule allows in-cluster destinations too. CNIs without NetworkPolicy support (e.g. default Flannel) silently no-op the policy.
+- **MetricsPort exposure**: Tor's `MetricsPort` continues to expose Prometheus-format counters on the pod IP (no key material, no descriptor content). With `clusterPodCIDRs` set and no inbound NetworkPolicy, only the kubelet probe reaches it through the node-local path; scrape from a Prometheus pod requires a tailored NetworkPolicy or external scrape via the host.
 
 ### Known failure modes (documented, not auto-recovered)
 

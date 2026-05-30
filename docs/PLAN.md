@@ -7,7 +7,7 @@ No existing operator (`bugfest/tor-controller`, `agabani/tor-operator`) implemen
 **Design pillars (non-negotiable):**
 - **Gateway API native** — implement the v1.5 spec.
 - **Tests first-class** — unit + envtest for every component; a custom API-shape conformance check against the live operator.
-- **Secure by default** — non-root pods, read-only filesystems, strict key permissions, supply-chain hygiene, explicit threat model (see [`SECURITY.md`](../SECURITY.md)). Operator-emitted NetworkPolicy for Tor pods is a tracked follow-up; not yet shipped.
+- **Secure by default** — non-root pods, read-only filesystems, strict key permissions, supply-chain hygiene, explicit threat model (see [`SECURITY.md`](../SECURITY.md)).
 - **Production / multi-tenant** — RBAC isolation, namespace scoping, cross-namespace via `ReferenceGrant`.
 
 ---
@@ -23,8 +23,9 @@ Implemented and tested:
 - Container images — `make images` builds the manager, router, obrefresh, tor-init, vanity-finalize, the `mkp224o` vanity brute-forcer (`images/mkp224o`), and the in-repo hardened Tor daemon image (`images/tor`).
 - Tests/CI — envtest suites (controller + router), operator-side kind e2e, real-Tor data-plane e2e, custom API-shape conformance, lint, govulncheck, gosec.
 - Distribution — the Helm chart installs a functional operator (RBAC + policy CRDs synced from `config/` via `make chart-sync`, CI drift guard, kind deploy-smoke). A `vX.Y.Z` tag publishes multi-arch, cosign-signed images + chart (OCI `ghcr.io` + GitHub Pages) with SBOM attestations; first tag `v0.1.0`, current `v0.3.1` (pending).
+- NetworkPolicy — per-Gateway egress NetworkPolicy emitted by the operator (v0.3.2). Egress allow-list: DNS, kube-apiserver, the resolved HTTPRoute backend Services (cross-ns gated by ReferenceGrant), and the public internet minus chart-supplied cluster pod CIDRs. Opt-out via `torPodNetworkPolicy.enabled=false`.
 
-The critical path to a functionally deployable operator — container images, a real-Tor data-plane e2e, and a published, signed chart — is complete. Cross-namespace `ReferenceGrant` shipped in `v0.3.0` (controller authority for `backendRefs`; router fail-closed); data-plane liveness/readiness/startup probes and `events: create;patch` RBAC shipped in `v0.3.1`. Remaining work is the independent feature backlog: onionbalance HA (`OnionBalancePolicy`) and the operator-emitted NetworkPolicy.
+The critical path to a functionally deployable operator — container images, a real-Tor data-plane e2e, and a published, signed chart — is complete. Cross-namespace `ReferenceGrant` shipped in `v0.3.0` (controller authority for `backendRefs`; router fail-closed); data-plane liveness/readiness/startup probes and `events: create;patch` RBAC shipped in `v0.3.1`. Remaining work is the independent feature backlog: onionbalance HA (`OnionBalancePolicy`).
 
 ---
 
@@ -177,7 +178,7 @@ Detailed threat model in [`SECURITY.md`](../SECURITY.md). Operative controls:
 
 1. **Pod hardening** — `runAsNonRoot`, fixed UID 65532, `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, drop `ALL` caps, `seccompProfile: RuntimeDefault`. HiddenServiceDir is an `emptyDir`; `tor-init` copies keys in and fixes perms (0700 dir, 0600 secret key).
 2. **Keys** — private keys only in Secrets, mounted `0600`/`0400`, never logged, never in ConfigMaps. Generated in-process (non-vanity) or a one-shot Job (vanity), never in the long-running operator.
-3. **NetworkPolicies** — **NOT YET IMPLEMENTED** (tracked follow-up). The Tor pod exposes `MetricsPort` on the pod IP (Prometheus counters only, no key material); scope ingress with your own NetworkPolicy until the operator-emitted policy ships.
+3. **NetworkPolicies** — per-Gateway egress NetworkPolicy emitted by the operator (v0.3.2). Locks lateral movement to DNS + kube-apiserver + resolved backend Services + public internet minus optional cluster pod CIDRs. Opt-out via chart values.
 4. **RBAC** — least-privilege; the operator does not get blanket Secret read.
 5. **Supply chain** — distroless images, SBOM (syft), cosign signing (keyless/OIDC), `govulncheck` in CI.
 6. **Tor-specific** — PoW + intro-DoS defenses on by default; curated torrc (no raw passthrough).
