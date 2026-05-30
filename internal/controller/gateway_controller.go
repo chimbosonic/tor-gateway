@@ -150,7 +150,7 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	var routes []gwv1.HTTPRoute
 	{
 		routeList := &gwv1.HTTPRouteList{}
-		if err := r.Client.List(ctx, routeList); err != nil {
+		if err := r.List(ctx, routeList); err != nil {
 			return ctrl.Result{}, err
 		}
 		for i := range routeList.Items {
@@ -474,7 +474,7 @@ func (r *GatewayReconciler) ensureNetworkPolicy(
 		stale := &netv1.NetworkPolicy{}
 		stale.Name = NetworkPolicyName(gw.Name)
 		stale.Namespace = gw.Namespace
-		if err := r.Client.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 		return nil

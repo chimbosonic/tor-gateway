@@ -13,6 +13,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -52,7 +53,7 @@ func (r *GatewayReconciler) resolveBackends(
 				name := string(ref.Name)
 				port := int32(0)
 				if ref.Port != nil {
-					port = int32(*ref.Port)
+					port = *ref.Port
 				}
 
 				if ns != route.Namespace {
@@ -72,7 +73,7 @@ func (r *GatewayReconciler) resolveBackends(
 				}
 
 				svc := &corev1.Service{}
-				if err := r.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, svc); err != nil {
+				if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, svc); err != nil {
 					if apierrors.IsNotFound(err) {
 						logger.Info("backend Service not found; skipping from NetworkPolicy",
 							"backend", client.ObjectKey{Namespace: ns, Name: name})
@@ -95,7 +96,7 @@ func (r *GatewayReconciler) resolveBackends(
 
 				seen[key{ns, name}] = ResolvedBackend{
 					Namespace:   ns,
-					PodSelector: copyLabels(svc.Spec.Selector),
+					PodSelector: maps.Clone(svc.Spec.Selector),
 					TargetPort:  target,
 					Protocol:    proto,
 				}
@@ -119,7 +120,7 @@ func (r *GatewayReconciler) grantsIn(
 		return v, nil
 	}
 	list := &gwv1beta1.ReferenceGrantList{}
-	if err := r.Client.List(ctx, list, client.InNamespace(ns)); err != nil {
+	if err := r.List(ctx, list, client.InNamespace(ns)); err != nil {
 		return nil, fmt.Errorf("list ReferenceGrants in %s: %w", ns, err)
 	}
 	cache[ns] = list.Items
@@ -143,12 +144,4 @@ func resolveTargetPort(svc *corev1.Service, requested int32) (intstr.IntOrString
 		return tp, proto, true
 	}
 	return intstr.IntOrString{}, "", false
-}
-
-func copyLabels(in map[string]string) map[string]string {
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }

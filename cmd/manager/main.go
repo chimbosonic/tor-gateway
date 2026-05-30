@@ -111,7 +111,8 @@ func main() {
 	flag.BoolVar(&torPodNetworkPolicyEnabled, "tor-pod-network-policy-enabled", true,
 		"Emit a per-Gateway NetworkPolicy that locks the Tor pod's egress.")
 	flag.StringVar(&clusterPodCIDRsRaw, "cluster-pod-cidrs", "",
-		"Comma-separated CIDRs the broad public-internet egress rule excludes (cluster pod nets). Required for real lockdown.")
+		"Comma-separated CIDRs excluded from the broad public-internet egress rule "+
+			"(cluster pod nets); required for real lockdown.")
 
 	opts := zap.Options{
 		Development: true,
@@ -123,7 +124,7 @@ func main() {
 
 	var clusterPodCIDRs []string
 	if clusterPodCIDRsRaw != "" {
-		for _, c := range strings.Split(clusterPodCIDRsRaw, ",") {
+		for c := range strings.SplitSeq(clusterPodCIDRsRaw, ",") {
 			c = strings.TrimSpace(c)
 			if _, _, err := net.ParseCIDR(c); err != nil {
 				setupLog.Error(err, "invalid --cluster-pod-cidrs entry", "cidr", c)
