@@ -47,3 +47,38 @@ func TestGeneratedRole_HasEventsRule(t *testing.T) {
 	}
 	t.Fatalf("role.yaml is missing an events rule with create;patch verbs")
 }
+
+// TestGeneratedRole_HasNetworkPoliciesRule asserts the generated
+// ClusterRole grants the verbs the operator needs to manage per-Gateway
+// NetworkPolicy children.
+func TestGeneratedRole_HasNetworkPoliciesRule(t *testing.T) {
+	p := filepath.Join("..", "..", "config", "rbac", "role.yaml")
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read %s: %v", p, err)
+	}
+	var role rbacv1.ClusterRole
+	if err := yaml.Unmarshal(b, &role); err != nil {
+		t.Fatalf("parse role: %v", err)
+	}
+	wantVerbs := []string{"get", "list", "watch", "create", "update", "patch", "delete"}
+	for _, r := range role.Rules {
+		if !slices.Contains(r.APIGroups, "networking.k8s.io") {
+			continue
+		}
+		if !slices.Contains(r.Resources, "networkpolicies") {
+			continue
+		}
+		ok := true
+		for _, v := range wantVerbs {
+			if !slices.Contains(r.Verbs, v) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return
+		}
+	}
+	t.Fatalf("role.yaml is missing a networking.k8s.io/networkpolicies rule with verbs %v", wantVerbs)
+}
