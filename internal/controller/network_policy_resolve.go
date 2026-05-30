@@ -64,6 +64,8 @@ func (r *GatewayReconciler) resolveBackends(
 						FromRef{Group: gwv1.GroupName, Kind: "HTTPRoute", Namespace: route.Namespace},
 						ToRef{Group: "", Kind: "Service", Name: name},
 					)
+					// Silent: the HTTPRoute reconciler already surfaces this as
+					// ResolvedRefs=RefNotPermitted (v0.3.0); no need to double-emit.
 					if !allowed {
 						continue
 					}
@@ -76,7 +78,7 @@ func (r *GatewayReconciler) resolveBackends(
 							"backend", client.ObjectKey{Namespace: ns, Name: name})
 						continue
 					}
-					return nil, err
+					return nil, fmt.Errorf("get Service %s/%s: %w", ns, name, err)
 				}
 				if len(svc.Spec.Selector) == 0 {
 					logger.Info("backend Service has no selector; skipping from NetworkPolicy",
