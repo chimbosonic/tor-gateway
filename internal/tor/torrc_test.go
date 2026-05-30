@@ -14,6 +14,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -90,6 +91,21 @@ func TestRender_GoldenFiles(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "with-metrics",
+			cfg: TorrcConfig{
+				HiddenServiceDir: "/var/lib/tor/hs",
+				DataDirectory:    "/var/lib/tor/data",
+				HiddenServicePort: PortMapping{
+					VirtualPort: 80,
+					TargetHost:  "127.0.0.1",
+					TargetPort:  9080,
+				},
+				PoWDefensesEnabled: true,
+				MetricsPort:        9035,
+				MetricsPortPolicy:  "accept 0.0.0.0/0",
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -159,6 +175,69 @@ func TestValidate_RejectsBadInputs(t *testing.T) {
 				t.Fatalf("error %q does not contain %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestRender_EmitsMetricsPort(t *testing.T) {
+	cfg := TorrcConfig{
+		HiddenServiceDir: "/var/lib/tor/hs",
+		DataDirectory:    "/var/lib/tor/data",
+		HiddenServicePort: PortMapping{
+			VirtualPort: 80,
+			TargetHost:  "127.0.0.1",
+			TargetPort:  9080,
+		},
+		PoWDefensesEnabled: true,
+		MetricsPort:        9035,
+		MetricsPortPolicy:  "accept 0.0.0.0/0",
+	}
+	out, err := Render(&cfg)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, want := range []string{
+		"MetricsPort 0.0.0.0:9035",
+		"MetricsPortPolicy accept 0.0.0.0/0",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered torrc missing %q\n--- got ---\n%s", want, out)
+		}
+	}
+}
+
+func TestRender_OmitsMetricsPortWhenZero(t *testing.T) {
+	cfg := TorrcConfig{
+		HiddenServiceDir: "/var/lib/tor/hs",
+		DataDirectory:    "/var/lib/tor/data",
+		HiddenServicePort: PortMapping{
+			VirtualPort: 80,
+			TargetHost:  "127.0.0.1",
+			TargetPort:  9080,
+		},
+		PoWDefensesEnabled: true,
+	}
+	out, err := Render(&cfg)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if strings.Contains(out, "MetricsPort") {
+		t.Errorf("MetricsPort emitted with zero value\n--- got ---\n%s", out)
+	}
+}
+
+func TestValidate_RejectsMetricsPortWithoutPolicy(t *testing.T) {
+	cfg := TorrcConfig{
+		HiddenServiceDir: "/var/lib/tor/hs",
+		DataDirectory:    "/var/lib/tor/data",
+		HiddenServicePort: PortMapping{
+			VirtualPort: 80,
+			TargetHost:  "127.0.0.1",
+			TargetPort:  9080,
+		},
+		MetricsPort: 9035,
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected Validate to reject MetricsPort without MetricsPortPolicy")
 	}
 }
 

@@ -51,6 +51,17 @@ type TorrcConfig struct {
 	// validated to live under HiddenServiceDir.
 	ClientAuthDir string
 
+	// MetricsPort, when non-zero, enables Tor's Prometheus-format metrics
+	// endpoint bound to 0.0.0.0:<MetricsPort>. The endpoint exposes only
+	// internal counters (no key material). MetricsPortPolicy is required
+	// when this is non-zero; cluster-internal scoping should come from a
+	// NetworkPolicy, not from the policy directive.
+	MetricsPort int
+
+	// MetricsPortPolicy is the Tor exit-policy-style ingress filter for
+	// MetricsPort (e.g. "accept 0.0.0.0/0"). Required when MetricsPort > 0.
+	MetricsPortPolicy string
+
 	// ExtraDirectives is a map of additional, **operator-trusted**
 	// directives to append. Use sparingly; prefer adding typed fields.
 	// Both the key and value are emitted verbatim, so callers MUST NOT
@@ -108,6 +119,12 @@ func (c *TorrcConfig) Validate() error {
 			return fmt.Errorf("tor: ClientAuthDir must equal %q, got %q", want, c.ClientAuthDir)
 		}
 	}
+	if c.MetricsPort < 0 || c.MetricsPort > 65535 {
+		return fmt.Errorf("tor: MetricsPort out of range: %d", c.MetricsPort)
+	}
+	if c.MetricsPort > 0 && c.MetricsPortPolicy == "" {
+		return errors.New("tor: MetricsPortPolicy required when MetricsPort > 0")
+	}
 	for k := range c.ExtraDirectives {
 		if strings.ContainsAny(k, " \t\r\n") || k == "" {
 			return fmt.Errorf("tor: invalid ExtraDirectives key %q", k)
@@ -158,6 +175,11 @@ func Render(c *TorrcConfig) (string, error) {
 	if c.PoWDefensesEnabled {
 		b.WriteString("HiddenServiceEnableIntroDoSDefense 1\n")
 		b.WriteString("HiddenServicePoWDefensesEnabled 1\n")
+	}
+
+	if c.MetricsPort > 0 {
+		fmt.Fprintf(&b, "MetricsPort 0.0.0.0:%d\n", c.MetricsPort)
+		fmt.Fprintf(&b, "MetricsPortPolicy %s\n", c.MetricsPortPolicy)
 	}
 
 	if c.ClientAuthDir != "" {

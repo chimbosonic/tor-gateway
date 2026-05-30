@@ -1,0 +1,15 @@
+# Rendered by tor-gateway; do not edit by hand.
+
+DataDirectory /var/lib/tor/data
+Log notice stdout
+SocksPort 0
+ClientUseIPv4 1
+ClientUseIPv6 1
+
+HiddenServiceDir /var/lib/tor/hs
+HiddenServiceVersion 3
+HiddenServicePort 80 127.0.0.1:9080
+HiddenServiceEnableIntroDoSDefense 1
+HiddenServicePoWDefensesEnabled 1
+MetricsPort 0.0.0.0:9035
+MetricsPortPolicy accept 0.0.0.0/0
