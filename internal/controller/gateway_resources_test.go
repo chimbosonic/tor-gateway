@@ -518,3 +518,46 @@ func TestBuildDeployment_UsesRouterServiceAccount(t *testing.T) {
 			dep.Spec.Template.Spec.ServiceAccountName, RouterRBACName("blog"))
 	}
 }
+
+func TestBuildDeployment_RouterHasProbePortAndProbes(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	dep, err := BuildDeployment(gw, DefaultPolicy(), EffectiveClientAuth{}, sampleImages(), scheme)
+	if err != nil {
+		t.Fatalf("BuildDeployment: %v", err)
+	}
+	var router *corev1.Container
+	for i, c := range dep.Spec.Template.Spec.Containers {
+		if c.Name == "router" {
+			router = &dep.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if router == nil {
+		t.Fatal("router container not found")
+	}
+	// containerPort
+	var probePortFound bool
+	for _, p := range router.Ports {
+		if p.Name == "probe" && p.ContainerPort == 8081 {
+			probePortFound = true
+		}
+	}
+	if !probePortFound {
+		t.Errorf("router missing probe containerPort 8081; got ports=%v", router.Ports)
+	}
+	// liveness probe
+	if router.LivenessProbe == nil || router.LivenessProbe.HTTPGet == nil {
+		t.Fatalf("router missing httpGet livenessProbe")
+	}
+	if router.LivenessProbe.HTTPGet.Path != "/healthz" || router.LivenessProbe.HTTPGet.Port.IntValue() != 8081 {
+		t.Errorf("router livenessProbe httpGet wrong: %+v", router.LivenessProbe.HTTPGet)
+	}
+	// readiness probe
+	if router.ReadinessProbe == nil || router.ReadinessProbe.HTTPGet == nil {
+		t.Fatalf("router missing httpGet readinessProbe")
+	}
+	if router.ReadinessProbe.HTTPGet.Path != "/healthz" || router.ReadinessProbe.HTTPGet.Port.IntValue() != 8081 {
+		t.Errorf("router readinessProbe httpGet wrong: %+v", router.ReadinessProbe.HTTPGet)
+	}
+}

@@ -287,6 +287,33 @@ func BuildDeployment(
 								"--gateway", gw.Name,
 								"--namespace", gw.Namespace,
 							},
+							Ports: []corev1.ContainerPort{
+								{Name: "probe", ContainerPort: 8081, Protocol: corev1.ProtocolTCP},
+							},
+							LivenessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/healthz",
+										Port: intstr.FromInt(8081),
+									},
+								},
+								InitialDelaySeconds: 5,
+								PeriodSeconds:       10,
+								TimeoutSeconds:      2,
+								FailureThreshold:    3,
+							},
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/healthz",
+										Port: intstr.FromInt(8081),
+									},
+								},
+								InitialDelaySeconds: 5,
+								PeriodSeconds:       10,
+								TimeoutSeconds:      2,
+								FailureThreshold:    3,
+							},
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
 									corev1.ResourceCPU:    resource.MustParse("50m"),
