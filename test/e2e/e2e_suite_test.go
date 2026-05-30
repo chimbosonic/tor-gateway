@@ -91,6 +91,16 @@ func deployOperator() {
 	_, err = utils.Run(exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage)))
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 
+	By("patching the manager Deployment to add --cluster-pod-cidrs=10.244.0.0/16 (kind's pod CIDR)")
+	// The per-Gateway NetworkPolicy excepts these CIDRs from the broad
+	// public-internet egress rule. Without this flag the broad rule
+	// silently allows in-cluster traffic and the networkpolicy spec's
+	// lockdown can't bite. kind's default pod net is 10.244.0.0/16.
+	_, err = utils.Run(exec.Command("kubectl", "-n", "tor-gateway-system", "patch", "deployment",
+		"tor-gateway-controller-manager", "--type=json",
+		"-p", `[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--cluster-pod-cidrs=10.244.0.0/16"}]`))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to patch manager with --cluster-pod-cidrs")
+
 	By("waiting for the controller-manager to be Available")
 	Eventually(func() string {
 		out, _ := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-system",
