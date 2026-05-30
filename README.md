@@ -15,7 +15,7 @@ Alpha — `v0.3.1` is the current release: installable, with signed multi-arch i
 > `make install-gateway-api-crds`.
 
 ```sh
-make kind-up
+make setup-test-e2e
 ```
 
 Published packages (OCI + Helm repo) exist once a `vX.Y.Z` release is cut (see [Releasing](#releasing)); before the first release, use the local-development install below.
@@ -58,7 +58,7 @@ cosign verify-attestation --type spdxjson ghcr.io/chimbosonic/tor-gateway-manage
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-The same verification applies to the other images: `tor-gateway-router`, `tor-gateway-obrefresh`, `tor-gateway-tor-init`, and `tor`.
+The same verification applies to the other images the chart deploys: `tor-gateway-router`, `tor-gateway-tor-init`, `tor-gateway-vanity-finalize`, `mkp224o`, `tor`, and (for the HA path) `tor-gateway-obrefresh`.
 
 ## Releasing
 
@@ -70,7 +70,7 @@ Pushing a `vX.Y.Z` tag triggers `.github/workflows/release.yml`, which builds an
    ```sh
    git checkout --orphan gh-pages && git rm -rf . && git commit --allow-empty -m "init gh-pages" && git push origin gh-pages
    ```
-2. After the first release, set the ghcr packages to **public** so users can pull without authenticating: the chart (`ghcr.io/chimbosonic/charts/tor-gateway`) and every image the chart deploys (`tor-gateway-manager`, `tor-gateway-router`, `tor-gateway-tor-init`, and `tor`; plus `tor-gateway-obrefresh` once the HA path uses it). Leaving the runtime images private deploys the operator but leaves Tor pods in `ImagePullBackOff`.
+2. After the first release, set the ghcr packages to **public** so users can pull without authenticating: the chart (`ghcr.io/chimbosonic/charts/tor-gateway`) and every image the chart deploys (`tor-gateway-manager`, `tor-gateway-router`, `tor-gateway-tor-init`, `tor-gateway-vanity-finalize`, `mkp224o`, and `tor`; plus `tor-gateway-obrefresh` once the HA path uses it). Leaving the runtime images private deploys the operator but leaves Tor pods in `ImagePullBackOff`.
 
 ## Features (v1 target)
 

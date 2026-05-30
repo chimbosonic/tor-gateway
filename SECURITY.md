@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Please report security issues privately to `agl314@chimbosonic.com` (PGP key TBD). Do not open public issues for unpatched vulnerabilities. We aim to acknowledge within 72 hours.
+Please report security issues privately to `agl314@chimbosonic.com`. Do not open public issues for unpatched vulnerabilities. We aim to acknowledge within 72 hours.
 
 ## Threat model (summary)
 
@@ -25,7 +25,7 @@ Please report security issues privately to `agl314@chimbosonic.com` (PGP key TBD
 3. **External attacker over Tor** — public attack against the `.onion`.
    - Mitigations: Tor PoW / intro-point DoS defenses enabled by default; optional v3 client auth via `TorClientAuthPolicy`.
 4. **Supply chain** — malicious operator image.
-   - Mitigations: images signed with cosign (keyless via GitHub OIDC), SBOM (syft) attached to releases, distroless base, pinned digests, `govulncheck` + `trivy` in CI.
+   - Mitigations: images signed with cosign (keyless via GitHub OIDC), SBOM (syft) attached to releases, distroless base, `govulncheck` + `gosec` in CI.
 
 ### Hardening defaults (enforced by the operator)
 
@@ -46,5 +46,6 @@ All pods produced by the operator:
 - **Lost key Secret** = permanent `.onion` address loss. The operator sets a `KeyMissing` condition and emits a Warning event; it does NOT auto-regenerate.
 - **Clock skew >30s** between cluster nodes can break Tor descriptor publication. Run NTP.
 - **`HiddenServiceDir` permissions wrong** = Tor refuses to start. Init container enforces `700`; do not bypass.
+- **`ClientOnionAuthDir` ownership** — Tor refuses any `ClientOnionAuthDir` not owned by the Tor uid. Kubernetes `Secret` and `ConfigMap` volume root dirs are owned by root (`fsGroup` sets group but not owner), so client-auth-using deployments must stage the directory via an `emptyDir` + init container that creates it as uid 65532 — never mount the Secret directly as the auth dir.
 
 See the design plan at `docs/PLAN.md` for the full architecture.

@@ -31,9 +31,10 @@ const (
 	// layer. This is the default and the secure choice.
 	ClientAuthModeStrict ClientAuthMode = "Strict"
 
-	// ClientAuthModeAudit accepts unauthorized clients but emits an event
-	// so the operator can preview the change before flipping to Strict.
-	// Useful during a roll-out; not for production.
+	// ClientAuthModeAudit logs that an auth policy applies but mounts no
+	// authorized_clients dir; the Tor service accepts all clients as if no
+	// policy were set. Use during a roll-out to preview the change before
+	// flipping to Strict; not for production.
 	ClientAuthModeAudit ClientAuthMode = "Audit"
 )
 

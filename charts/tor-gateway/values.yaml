@@ -1,4 +1,6 @@
-# Default values for tor-gateway. See README.md for full documentation.
+# Default values for tor-gateway. See the project README at
+# https://github.com/chimbosonic/tor-gateway for installation, signing
+# verification, and the design plan (docs/PLAN.md).
 
 # Whether to install the operator's Policy CRDs (TorServicePolicy etc.).
 # Set to false if you manage CRDs out-of-band (e.g. via a separate ArgoCD app
@@ -11,7 +13,10 @@ manager:
     repository: ghcr.io/chimbosonic/tor-gateway-manager
     tag: ""  # defaults to .Chart.AppVersion
     pullPolicy: IfNotPresent
-    # If you adopt cosign keyless signing, document expected digest pinning here.
+    # Images are cosign-signed (keyless via GitHub OIDC); verify per README
+    # before pulling, and pin by digest in production:
+    #   tag: ""
+    #   digest: "sha256:..."
   replicas: 1
   # Single-binary controller with manager-side leader election.
   leaderElection:

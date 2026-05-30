@@ -7,7 +7,7 @@ No existing operator (`bugfest/tor-controller`, `agabani/tor-operator`) implemen
 **Design pillars (non-negotiable):**
 - **Gateway API native** — implement the v1.5 spec.
 - **Tests first-class** — unit + envtest for every component; a custom API-shape conformance check against the live operator.
-- **Secure by default** — non-root pods, read-only filesystems, strict key permissions, NetworkPolicies, supply-chain hygiene, explicit threat model (see [`SECURITY.md`](../SECURITY.md)).
+- **Secure by default** — non-root pods, read-only filesystems, strict key permissions, supply-chain hygiene, explicit threat model (see [`SECURITY.md`](../SECURITY.md)). Operator-emitted NetworkPolicy for Tor pods is a tracked follow-up; not yet shipped.
 - **Production / multi-tenant** — RBAC isolation, namespace scoping, cross-namespace via `ReferenceGrant`.
 
 ---
@@ -22,7 +22,7 @@ Implemented and tested:
 - Vanity addresses — a `TorServicePolicy.vanityPrefix` on a key-less Gateway triggers a one-shot, creation-time `mkp224o` harvest Job (hardened `images/mkp224o`; a per-Gateway ServiceAccount + Role scoped to `get;update;patch` on a single pre-created output Secret; the `vanity-finalize` container writes the harvested keys). The operator promotes the key into the canonical `<gw>-keys`, then deletes the throwaway Secret + Job; a harvest that exceeds its deadline sets `Programmed=False`/`VanityHarvestFailed` and is not retried until the prefix changes. CEL requires `vanityAcknowledgeLongRunning` for prefixes over 6 chars. Covered by builder unit tests + envtest specs (the Job is faked under envtest; the image is smoke-tested separately).
 - Container images — `make images` builds the manager, router, obrefresh, tor-init, vanity-finalize, the `mkp224o` vanity brute-forcer (`images/mkp224o`), and the in-repo hardened Tor daemon image (`images/tor`).
 - Tests/CI — envtest suites (controller + router), operator-side kind e2e, real-Tor data-plane e2e, custom API-shape conformance, lint, govulncheck, gosec.
-- Distribution — the Helm chart installs a functional operator (RBAC + policy CRDs synced from `config/` via `make chart-sync`, CI drift guard, kind deploy-smoke). A `vX.Y.Z` tag publishes multi-arch, cosign-signed images + chart (OCI `ghcr.io` + GitHub Pages) with SBOM attestations; first release `v0.1.0`.
+- Distribution — the Helm chart installs a functional operator (RBAC + policy CRDs synced from `config/` via `make chart-sync`, CI drift guard, kind deploy-smoke). A `vX.Y.Z` tag publishes multi-arch, cosign-signed images + chart (OCI `ghcr.io` + GitHub Pages) with SBOM attestations; first tag `v0.1.0`, current `v0.3.1` (pending).
 
 The critical path to a functionally deployable operator — container images, a real-Tor data-plane e2e, and a published, signed chart — is complete. Cross-namespace `ReferenceGrant` shipped in `v0.3.0` (controller authority for `backendRefs`; router fail-closed); data-plane liveness/readiness/startup probes and `events: create;patch` RBAC shipped in `v0.3.1`. Remaining work is the independent feature backlog: onionbalance HA (`OnionBalancePolicy`) and the operator-emitted NetworkPolicy.
 
@@ -89,7 +89,7 @@ The user still sees one `.onion` (the master). Backends each have their own key 
 | `GatewayClass` | We register `torgateway.io/gateway-controller`. |
 | `Gateway` | Custom listener protocol `torgateway.io/HiddenService` (domain-prefixed, per spec). |
 | `HTTPRoute` | Attached via `parentRefs`; drives in-cluster fan-out. |
-| `ReferenceGrant` | For cross-namespace Secret refs (planned). |
+| `ReferenceGrant` | Cross-namespace `backendRefs` gating (shipped v0.3.0). |
 
 ### Policy CRDs — `policy.torgateway.io/v1alpha1`
 
@@ -142,7 +142,7 @@ Reconcile:
 
 ```
 api/v1alpha1/            # Policy CRD Go types
-cmd/{manager,router,obrefresh,tor-init}/
+cmd/{manager,router,obrefresh,tor-init,vanity-finalize}/
 internal/
   controller/            # gatewayclass, gateway, httproute, policy reconcilers
   tor/                   # onion derivation, keys, torrc, permissions, vanity, client-auth
