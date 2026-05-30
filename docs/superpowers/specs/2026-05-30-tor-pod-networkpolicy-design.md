@@ -153,7 +153,7 @@ spec:
 
 Rule 2 is needed because in-cluster apiserver pods (the kubeadm/k3s pattern) sit on the pod network and would be excluded by rule 4's `except` when `clusterPodCIDRs` is set — without rule 2 the router would lose its watch connection. Managed clusters (GKE/EKS/AKS) reach the apiserver via rule 4 (no `except` matches the external IP), so rule 2 is redundant there but harmless.
 
-Ordering is deterministic (DNS, apiserver, backends sorted by `(namespace, name, port)`, public-internet last) so the rendered NP is golden-testable.
+Ordering is deterministic (DNS, apiserver, backends sorted by `(namespace, port, podSelector-first-label-key)`, public-internet last) so the rendered NP is golden-testable. Backends are deduplicated upstream by `(namespace, name)` in `resolveBackends`, so the sort key never sees collisions on the same Service.
 
 ## Error handling
 
