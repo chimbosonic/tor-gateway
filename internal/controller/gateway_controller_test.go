@@ -18,10 +18,15 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	netv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
 	"github.com/chimbosonic/tor-gateway/internal/tor"
@@ -274,3 +279,193 @@ func client_IgnoreAlreadyExists(err error) error {
 	}
 	return err
 }
+
+var _ = Describe("Gateway NetworkPolicy", func() {
+	ctx := context.Background()
+
+	const (
+		ns      = "np-test"
+		gwClass = "tor-gateway-test"
+		svcName = "np-app"
+	)
+
+	// gatewayReconciler is shared across specs so the "disable flag" case can
+	// toggle TorPodNetworkPolicyEnabled and observe the NP deletion path on
+	// the next manual Reconcile.
+	var gatewayReconciler *GatewayReconciler
+
+	makeGateway := func(name, namespace, className string) *gwv1.Gateway {
+		gw := &gwv1.Gateway{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Spec: gwv1.GatewaySpec{
+				GatewayClassName: gwv1.ObjectName(className),
+				Listeners: []gwv1.Listener{{
+					Name:     "onion",
+					Port:     80,
+					Protocol: HiddenServiceProtocol,
+				}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, gw)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, gw) })
+		return gw
+	}
+
+	BeforeEach(func() {
+		gc := &gwv1.GatewayClass{
+			ObjectMeta: metav1.ObjectMeta{Name: gwClass},
+			Spec:       gwv1.GatewayClassSpec{ControllerName: ControllerName},
+		}
+		if err := k8sClient.Create(ctx, gc); err != nil {
+			Expect(client_IgnoreAlreadyExists(err)).NotTo(HaveOccurred())
+		}
+
+		nsObj := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}
+		if err := k8sClient.Create(ctx, nsObj); err != nil {
+			Expect(client_IgnoreAlreadyExists(err)).NotTo(HaveOccurred())
+		}
+
+		// The default reconciler enables the feature.
+		gatewayReconciler = &GatewayReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			Images: RuntimeImages{
+				Tor:      "tor:test",
+				Router:   "router:test",
+				TorInit:  "init:test",
+				Operator: "manager:test",
+			},
+			TorPodNetworkPolicyEnabled: true,
+		}
+	})
+
+	It("creates the NetworkPolicy with DNS + apiserver + public when there are no routes", func() {
+		gw := makeGateway("np-gw", ns, gwClass)
+		_, err := gatewayReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
+		Expect(err).NotTo(HaveOccurred())
+
+		np := &netv1.NetworkPolicy{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: NetworkPolicyName(gw.Name)}, np)).To(Succeed())
+		Expect(np.Spec.PolicyTypes).To(ConsistOf(netv1.PolicyTypeEgress))
+		Expect(np.Spec.Egress).To(HaveLen(3)) // DNS, apiserver, public
+	})
+
+	It("adds a per-backend rule when an HTTPRoute targets the Gateway", func() {
+		gw := makeGateway("np-gw-route", ns, gwClass)
+
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: svcName, Namespace: ns},
+			Spec: corev1.ServiceSpec{
+				Selector: map[string]string{"app": "np-app"},
+				Ports:    []corev1.ServicePort{{Port: 5678, TargetPort: intstr.FromInt(5678), Protocol: corev1.ProtocolTCP}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, svc)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, svc) })
+
+		port := gwv1.PortNumber(5678)
+		route := &gwv1.HTTPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "np-route", Namespace: ns},
+			Spec: gwv1.HTTPRouteSpec{
+				CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: gwv1.ObjectName(gw.Name)}}},
+				Rules: []gwv1.HTTPRouteRule{{
+					BackendRefs: []gwv1.HTTPBackendRef{{BackendRef: gwv1.BackendRef{
+						BackendObjectReference: gwv1.BackendObjectReference{Name: gwv1.ObjectName(svcName), Port: &port},
+					}}},
+				}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, route)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, route) })
+
+		_, err := gatewayReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
+		Expect(err).NotTo(HaveOccurred())
+
+		np := &netv1.NetworkPolicy{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: NetworkPolicyName(gw.Name)}, np)).To(Succeed())
+		Expect(np.Spec.Egress).To(HaveLen(4)) // DNS, apiserver, backend, public
+
+		// Backend rule is index 2.
+		backendRule := np.Spec.Egress[2]
+		Expect(backendRule.To).To(HaveLen(1))
+		Expect(backendRule.To[0].NamespaceSelector.MatchLabels).To(HaveKeyWithValue("kubernetes.io/metadata.name", ns))
+		Expect(backendRule.To[0].PodSelector.MatchLabels).To(HaveKeyWithValue("app", "np-app"))
+	})
+
+	It("skips a cross-ns backendRef when no ReferenceGrant permits it, then adds the rule when granted", func() {
+		const backendNS = "np-test-backend"
+		backendNsObj := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: backendNS}}
+		if err := k8sClient.Create(ctx, backendNsObj); err != nil {
+			Expect(client_IgnoreAlreadyExists(err)).NotTo(HaveOccurred())
+		}
+
+		gw := makeGateway("gw-crossns", ns, gwClass)
+
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "remote", Namespace: backendNS},
+			Spec: corev1.ServiceSpec{
+				Selector: map[string]string{"app": "remote"},
+				Ports:    []corev1.ServicePort{{Port: 5678, TargetPort: intstr.FromInt(5678), Protocol: corev1.ProtocolTCP}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, svc)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, svc) })
+
+		bns := gwv1.Namespace(backendNS)
+		port := gwv1.PortNumber(5678)
+		route := &gwv1.HTTPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "crossns", Namespace: ns},
+			Spec: gwv1.HTTPRouteSpec{
+				CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw-crossns"}}},
+				Rules: []gwv1.HTTPRouteRule{{
+					BackendRefs: []gwv1.HTTPBackendRef{{BackendRef: gwv1.BackendRef{
+						BackendObjectReference: gwv1.BackendObjectReference{Name: "remote", Namespace: &bns, Port: &port},
+					}}},
+				}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, route)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, route) })
+
+		_, err := gatewayReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
+		Expect(err).NotTo(HaveOccurred())
+
+		np := &netv1.NetworkPolicy{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: NetworkPolicyName("gw-crossns")}, np)).To(Succeed())
+		Expect(np.Spec.Egress).To(HaveLen(3)) // DNS, apiserver, public — no per-backend rule yet
+
+		grant := &gwv1beta1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "allow-np", Namespace: backendNS},
+			Spec: gwv1beta1.ReferenceGrantSpec{
+				From: []gwv1beta1.ReferenceGrantFrom{{Group: gwv1.GroupName, Kind: "HTTPRoute", Namespace: gwv1beta1.Namespace(ns)}},
+				To:   []gwv1beta1.ReferenceGrantTo{{Group: "", Kind: "Service"}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, grant)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, grant) })
+
+		_, err = gatewayReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: NetworkPolicyName("gw-crossns")}, np)).To(Succeed())
+		Expect(np.Spec.Egress).To(HaveLen(4)) // DNS, apiserver, granted backend, public
+		Expect(np.Spec.Egress[2].To[0].NamespaceSelector.MatchLabels).To(HaveKeyWithValue("kubernetes.io/metadata.name", backendNS))
+	})
+
+	It("deletes the NetworkPolicy when the feature flag is disabled", func() {
+		gw := makeGateway("gw-disabled", ns, gwClass)
+		_, err := gatewayReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
+		Expect(err).NotTo(HaveOccurred())
+
+		np := &netv1.NetworkPolicy{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: NetworkPolicyName(gw.Name)}, np)).To(Succeed())
+
+		// Disable, reconcile, NP gone.
+		gatewayReconciler.TorPodNetworkPolicyEnabled = false
+		_, err = gatewayReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(gw)})
+		Expect(err).NotTo(HaveOccurred())
+
+		err = k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: NetworkPolicyName(gw.Name)}, np)
+		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "NetworkPolicy should be deleted; got err=%v", err)
+	})
+})
