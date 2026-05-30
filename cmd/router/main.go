@@ -15,8 +15,9 @@ You may obtain a copy of the License at
 // owning Gateway via a Kubernetes informer, and reverse-proxies requests to
 // the matching in-cluster Service backendRefs.
 //
-// The router is deliberately small and pure: all Tor-specific behavior is
-// outside it, so it can be unit-tested without a Tor daemon.
+// A second, narrow listener on --probe-addr serves GET /healthz for
+// kubelet probes (the traffic listener is loopback only so kubelet can't
+// reach it directly).
 package main
 
 import (
@@ -33,13 +34,27 @@ import (
 	"github.com/chimbosonic/tor-gateway/internal/router"
 )
 
+// healthzHandler returns a handler that responds 200 OK to GET /healthz.
+// The probe listener is started only after the route aggregator has loaded
+// its initial rule set, so a successful probe means "rules loaded and
+// listener up", not just "process alive".
+func healthzHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	return mux
+}
+
 func main() {
 	var (
 		addr        string
+		probeAddr   string
 		gatewayName string
 		gatewayNS   string
 	)
 	flag.StringVar(&addr, "listen", "127.0.0.1:9080", "address the router listens on (Tor connects here)")
+	flag.StringVar(&probeAddr, "probe-addr", ":8081", "address the /healthz probe listener binds to")
 	flag.StringVar(&gatewayName, "gateway", "", "name of the Gateway this router serves")
 	flag.StringVar(&gatewayNS, "namespace", "", "namespace of the Gateway this router serves")
 	flag.Parse()
@@ -69,12 +84,25 @@ func main() {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	probeSrv := &http.Server{
+		Addr:              probeAddr,
+		Handler:           healthzHandler(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
+		_ = probeSrv.Shutdown(shutdownCtx)
+	}()
+
+	go func() {
+		slog.Info("router probe listening", "addr", probeAddr)
+		if err := probeSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("probe listener exited with error", "err", err)
+		}
 	}()
 
 	slog.Info("router listening", "addr", addr, "gateway", gatewayName, "namespace", gatewayNS)
