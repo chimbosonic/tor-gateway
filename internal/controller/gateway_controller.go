@@ -627,8 +627,37 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&batchv1.Job{}).
 		Watches(&policyv1alpha1.TorServicePolicy{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForServicePolicy)).
 		Watches(&policyv1alpha1.TorClientAuthPolicy{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForClientAuthPolicy)).
+		Watches(&gwv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForHTTPRoute)).
 		Named("gateway").
 		Complete(r)
+}
+
+// gatewaysForHTTPRoute maps an HTTPRoute to reconcile requests for every
+// Gateway named by its parentRefs. Without this, an HTTPRoute add/update/
+// delete leaves the per-Gateway NetworkPolicy's per-backend egress rules
+// stale until something else triggers reconciliation.
+func (r *GatewayReconciler) gatewaysForHTTPRoute(_ context.Context, obj client.Object) []reconcile.Request {
+	route, ok := obj.(*gwv1.HTTPRoute)
+	if !ok {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, p := range route.Spec.ParentRefs {
+		if p.Group != nil && *p.Group != "" && string(*p.Group) != gwv1.GroupName {
+			continue
+		}
+		if p.Kind != nil && *p.Kind != "" && string(*p.Kind) != "Gateway" {
+			continue
+		}
+		ns := route.Namespace
+		if p.Namespace != nil {
+			ns = string(*p.Namespace)
+		}
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: client.ObjectKey{Namespace: ns, Name: string(p.Name)},
+		})
+	}
+	return reqs
 }
 
 // gatewaysForServicePolicy maps a TorServicePolicy to reconcile requests for
