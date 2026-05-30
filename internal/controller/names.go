@@ -81,6 +81,8 @@ const (
 	configMountPath    = "/etc/tor"
 	loopbackTargetHost = "127.0.0.1"
 	loopbackTargetPort = 9080
+	routerProbePort    = 8081
+	torMetricsPort     = 9035
 
 	// clientAuthVolumeName / clientAuthMountPath are used when a
 	// TorClientAuthPolicy is attached: the Secret holding client pubkeys

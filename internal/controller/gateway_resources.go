@@ -139,7 +139,7 @@ func BuildTorrcConfigMap(
 			TargetHost:  loopbackTargetHost,
 			TargetPort:  loopbackTargetPort,
 		},
-		MetricsPort:       9035,
+		MetricsPort:       torMetricsPort,
 		MetricsPortPolicy: "accept 0.0.0.0/0",
 	}
 	if auth.Enabled {
@@ -275,13 +275,13 @@ func BuildDeployment(
 							Resources:       policy.Resources,
 							SecurityContext: hardenedContainerSec(),
 							Ports: []corev1.ContainerPort{
-								{Name: "metrics", ContainerPort: 9035, Protocol: corev1.ProtocolTCP},
+								{Name: "metrics", ContainerPort: torMetricsPort, Protocol: corev1.ProtocolTCP},
 							},
 							StartupProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
 									HTTPGet: &corev1.HTTPGetAction{
 										Path: "/metrics",
-										Port: intstr.FromInt(9035),
+										Port: intstr.FromInt(torMetricsPort),
 									},
 								},
 								PeriodSeconds:    5,
@@ -292,7 +292,7 @@ func BuildDeployment(
 								ProbeHandler: corev1.ProbeHandler{
 									HTTPGet: &corev1.HTTPGetAction{
 										Path: "/metrics",
-										Port: intstr.FromInt(9035),
+										Port: intstr.FromInt(torMetricsPort),
 									},
 								},
 								PeriodSeconds:    10,
@@ -303,7 +303,7 @@ func BuildDeployment(
 								ProbeHandler: corev1.ProbeHandler{
 									HTTPGet: &corev1.HTTPGetAction{
 										Path: "/metrics",
-										Port: intstr.FromInt(9035),
+										Port: intstr.FromInt(torMetricsPort),
 									},
 								},
 								PeriodSeconds:    10,
@@ -326,13 +326,13 @@ func BuildDeployment(
 								"--namespace", gw.Namespace,
 							},
 							Ports: []corev1.ContainerPort{
-								{Name: "probe", ContainerPort: 8081, Protocol: corev1.ProtocolTCP},
+								{Name: "probe", ContainerPort: routerProbePort, Protocol: corev1.ProtocolTCP},
 							},
 							LivenessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
 									HTTPGet: &corev1.HTTPGetAction{
 										Path: "/healthz",
-										Port: intstr.FromInt(8081),
+										Port: intstr.FromInt(routerProbePort),
 									},
 								},
 								InitialDelaySeconds: 5,
@@ -344,7 +344,7 @@ func BuildDeployment(
 								ProbeHandler: corev1.ProbeHandler{
 									HTTPGet: &corev1.HTTPGetAction{
 										Path: "/healthz",
-										Port: intstr.FromInt(8081),
+										Port: intstr.FromInt(routerProbePort),
 									},
 								},
 								InitialDelaySeconds: 5,
