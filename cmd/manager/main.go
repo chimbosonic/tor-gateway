@@ -19,7 +19,9 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"net"
 	"os"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -104,11 +106,30 @@ func main() {
 	flag.DurationVar(&vanityDeadline, "vanity-active-deadline", time.Hour,
 		"max wall-clock a vanity harvest Job runs before failing (the difficulty guard)")
 
+	var torPodNetworkPolicyEnabled bool
+	var clusterPodCIDRsRaw string
+	flag.BoolVar(&torPodNetworkPolicyEnabled, "tor-pod-network-policy-enabled", true,
+		"Emit a per-Gateway NetworkPolicy that locks the Tor pod's egress.")
+	flag.StringVar(&clusterPodCIDRsRaw, "cluster-pod-cidrs", "",
+		"Comma-separated CIDRs the broad public-internet egress rule excludes (cluster pod nets). Required for real lockdown.")
+
 	opts := zap.Options{
 		Development: true,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	var clusterPodCIDRs []string
+	if clusterPodCIDRsRaw != "" {
+		for _, c := range strings.Split(clusterPodCIDRsRaw, ",") {
+			c = strings.TrimSpace(c)
+			if _, _, err := net.ParseCIDR(c); err != nil {
+				setupLog.Error(err, "invalid --cluster-pod-cidrs entry", "cidr", c)
+				os.Exit(2)
+			}
+			clusterPodCIDRs = append(clusterPodCIDRs, c)
+		}
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -221,9 +242,11 @@ func main() {
 			VanityFinalize: vanityFinalizeImage,
 		},
 		//nolint:staticcheck // record.EventRecorder API is used throughout the controller and its tests
-		Recorder:       mgr.GetEventRecorderFor("gateway"),
-		VanityDeadline: vanityDeadline,
-		APIReader:      mgr.GetAPIReader(),
+		Recorder:                   mgr.GetEventRecorderFor("gateway"),
+		VanityDeadline:             vanityDeadline,
+		APIReader:                  mgr.GetAPIReader(),
+		TorPodNetworkPolicyEnabled: torPodNetworkPolicyEnabled,
+		ClusterPodCIDRs:            clusterPodCIDRs,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "gateway")
 		os.Exit(1)

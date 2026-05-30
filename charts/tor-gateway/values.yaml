@@ -97,6 +97,23 @@ gatewayClass:
 managerNetworkPolicy:
   enabled: true
 
+# Per-Gateway NetworkPolicy emitted by the operator for each Tor pod.
+# Egress-only; locks lateral movement to DNS, kube-apiserver, the resolved
+# HTTPRoute backend Services (cross-ns gated by ReferenceGrant), and the
+# public internet.
+torPodNetworkPolicy:
+  # When true, the operator emits the per-Gateway NetworkPolicy.
+  enabled: true
+  # Your cluster's pod CIDR(s); used as `except` entries in the broad
+  # public-internet egress rule so cluster pods are reachable ONLY via
+  # the per-backend whitelist. WITHOUT THIS SET, the NetworkPolicy still
+  # ships but cluster lateral movement is NOT blocked.
+  #   kubeadm:  kubectl cluster-info dump | grep -m1 cluster-cidr
+  #   GKE:      gcloud container clusters describe ...
+  #   EKS:      VPC CNI subnet CIDR
+  # Multiple CIDRs allowed (dual-stack or aliased pod nets).
+  clusterPodCIDRs: []
+
 # Service account, RBAC, and pod security toggles.
 serviceAccount:
   create: true

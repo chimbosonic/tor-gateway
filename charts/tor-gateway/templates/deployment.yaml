@@ -36,6 +36,10 @@ spec:
             - --mkp224o-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.mkp224oImage .) }}
             - --vanity-finalize-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.vanityFinalizeImage .) }}
             - --vanity-active-deadline={{ .Values.torRuntime.vanityActiveDeadline }}
+            - --tor-pod-network-policy-enabled={{ .Values.torPodNetworkPolicy.enabled }}
+            {{- with .Values.torPodNetworkPolicy.clusterPodCIDRs }}
+            - --cluster-pod-cidrs={{ join "," . }}
+            {{- end }}
           ports:
             - name: health
               containerPort: {{ .Values.manager.health.port }}

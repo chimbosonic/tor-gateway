@@ -21,6 +21,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	netv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -51,7 +52,9 @@ type GatewayReconciler struct {
 	Recorder       record.EventRecorder
 	VanityDeadline time.Duration
 	// APIReader is a direct, uncached API-server reader (defeats informer lag).
-	APIReader client.Reader
+	APIReader                  client.Reader
+	TorPodNetworkPolicyEnabled bool
+	ClusterPodCIDRs            []string
 }
 
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch;update;patch
@@ -140,6 +143,25 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// 5. Headless Service.
 	if _, err := r.ensureService(ctx, gw); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure service: %w", err)
+	}
+
+	// List HTTPRoutes targeting this Gateway for the NetworkPolicy egress
+	// whitelist (same query used for attachedRoutes status).
+	var routes []gwv1.HTTPRoute
+	{
+		routeList := &gwv1.HTTPRouteList{}
+		if err := r.Client.List(ctx, routeList); err != nil {
+			return ctrl.Result{}, err
+		}
+		for i := range routeList.Items {
+			if routeTargetsGateway(&routeList.Items[i], gw) {
+				routes = append(routes, routeList.Items[i])
+			}
+		}
+	}
+	if err := r.ensureNetworkPolicy(ctx, gw, routes); err != nil {
+		logger.Error(err, "ensureNetworkPolicy failed")
+		return ctrl.Result{}, err
 	}
 
 	// 6. Status: addresses + conditions + per-listener status.
@@ -439,6 +461,67 @@ func (r *GatewayReconciler) ensureService(ctx context.Context, gw *gwv1.Gateway)
 		return nil, err
 	}
 	return current, nil
+}
+
+func (r *GatewayReconciler) ensureNetworkPolicy(
+	ctx context.Context,
+	gw *gwv1.Gateway,
+	routes []gwv1.HTTPRoute,
+) error {
+	if !r.TorPodNetworkPolicyEnabled {
+		// Feature off: best-effort delete any stale NetworkPolicy so toggling
+		// the flag is reversible.
+		stale := &netv1.NetworkPolicy{}
+		stale.Name = NetworkPolicyName(gw.Name)
+		stale.Namespace = gw.Namespace
+		if err := r.Client.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		return nil
+	}
+
+	backends, err := r.resolveBackends(ctx, gw, routes)
+	if err != nil {
+		return err
+	}
+	desired, err := BuildNetworkPolicy(gw, backends, r.ClusterPodCIDRs, r.Scheme)
+	if err != nil {
+		return err
+	}
+	current := &netv1.NetworkPolicy{}
+	current.Name = desired.Name
+	current.Namespace = desired.Namespace
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, current, func() error {
+		current.Labels = desired.Labels
+		current.Spec = desired.Spec
+		current.OwnerReferences = desired.OwnerReferences
+		return nil
+	})
+	return err
+}
+
+// routeTargetsGateway reports whether route's parentRefs designate gw.
+func routeTargetsGateway(route *gwv1.HTTPRoute, gw *gwv1.Gateway) bool {
+	for _, p := range route.Spec.ParentRefs {
+		if string(p.Name) != gw.Name {
+			continue
+		}
+		ns := route.Namespace
+		if p.Namespace != nil {
+			ns = string(*p.Namespace)
+		}
+		if ns != gw.Namespace {
+			continue
+		}
+		if p.Group != nil && *p.Group != "" && string(*p.Group) != gwv1.GroupName {
+			continue
+		}
+		if p.Kind != nil && *p.Kind != "" && string(*p.Kind) != "Gateway" {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (r *GatewayReconciler) updateStatus(ctx context.Context, gw *gwv1.Gateway, kp *tor.KeyPair) error {
