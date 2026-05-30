@@ -322,6 +322,7 @@ func BuildDeployment(
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Args: []string{
 								"--listen", fmt.Sprintf("%s:%d", loopbackTargetHost, loopbackTargetPort),
+								"--probe-addr", fmt.Sprintf(":%d", routerProbePort),
 								"--gateway", gw.Name,
 								"--namespace", gw.Namespace,
 							},
