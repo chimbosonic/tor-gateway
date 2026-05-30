@@ -139,6 +139,8 @@ func BuildTorrcConfigMap(
 			TargetHost:  loopbackTargetHost,
 			TargetPort:  loopbackTargetPort,
 		},
+		MetricsPort:       9035,
+		MetricsPortPolicy: "accept 0.0.0.0/0",
 	}
 	if auth.Enabled {
 		cfg.ClientAuthDir = hsServiceDir + "/" + tor.AuthorizedClientsSubdir
@@ -272,6 +274,42 @@ func BuildDeployment(
 							Args:            []string{"-f", configMountPath + "/torrc"},
 							Resources:       policy.Resources,
 							SecurityContext: hardenedContainerSec(),
+							Ports: []corev1.ContainerPort{
+								{Name: "metrics", ContainerPort: 9035, Protocol: corev1.ProtocolTCP},
+							},
+							StartupProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/metrics",
+										Port: intstr.FromInt(9035),
+									},
+								},
+								PeriodSeconds:    5,
+								TimeoutSeconds:   2,
+								FailureThreshold: 30,
+							},
+							LivenessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/metrics",
+										Port: intstr.FromInt(9035),
+									},
+								},
+								PeriodSeconds:    10,
+								TimeoutSeconds:   2,
+								FailureThreshold: 3,
+							},
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/metrics",
+										Port: intstr.FromInt(9035),
+									},
+								},
+								PeriodSeconds:    10,
+								TimeoutSeconds:   2,
+								FailureThreshold: 3,
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: configVolumeName, MountPath: configMountPath, ReadOnly: true},
 								{Name: hsDirVolumeName, MountPath: hsDirMountPath},

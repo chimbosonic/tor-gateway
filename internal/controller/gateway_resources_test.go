@@ -561,3 +561,60 @@ func TestBuildDeployment_RouterHasProbePortAndProbes(t *testing.T) {
 		t.Errorf("router readinessProbe httpGet wrong: %+v", router.ReadinessProbe.HTTPGet)
 	}
 }
+
+func TestBuildDeployment_TorHasMetricsPortAndProbes(t *testing.T) {
+	gw := sampleGateway()
+	dep, err := BuildDeployment(gw, DefaultPolicy(), EffectiveClientAuth{}, sampleImages(), testScheme(t))
+	if err != nil {
+		t.Fatalf("BuildDeployment: %v", err)
+	}
+	var tor *corev1.Container
+	for i, c := range dep.Spec.Template.Spec.Containers {
+		if c.Name == "tor" {
+			tor = &dep.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if tor == nil {
+		t.Fatal("tor container not found")
+	}
+	// containerPort
+	var metricsPortFound bool
+	for _, p := range tor.Ports {
+		if p.Name == "metrics" && p.ContainerPort == 9035 {
+			metricsPortFound = true
+		}
+	}
+	if !metricsPortFound {
+		t.Errorf("tor missing metrics containerPort 9035; got ports=%v", tor.Ports)
+	}
+	for _, probe := range []struct {
+		name string
+		p    *corev1.Probe
+	}{
+		{"startup", tor.StartupProbe},
+		{"liveness", tor.LivenessProbe},
+		{"readiness", tor.ReadinessProbe},
+	} {
+		if probe.p == nil || probe.p.HTTPGet == nil {
+			t.Fatalf("tor missing httpGet %sProbe", probe.name)
+		}
+		if probe.p.HTTPGet.Path != "/metrics" || probe.p.HTTPGet.Port.IntValue() != 9035 {
+			t.Errorf("tor %sProbe wrong: %+v", probe.name, probe.p.HTTPGet)
+		}
+	}
+}
+
+func TestBuildTorrcConfigMap_SetsMetricsPort(t *testing.T) {
+	gw := sampleGateway()
+	cm, err := BuildTorrcConfigMap(gw, DefaultPolicy(), EffectiveClientAuth{}, testScheme(t))
+	if err != nil {
+		t.Fatalf("BuildTorrcConfigMap: %v", err)
+	}
+	torrc := cm.Data["torrc"]
+	for _, want := range []string{"MetricsPort 0.0.0.0:9035", "MetricsPortPolicy accept 0.0.0.0/0"} {
+		if !strings.Contains(torrc, want) {
+			t.Errorf("torrc missing %q\n--- torrc ---\n%s", want, torrc)
+		}
+	}
+}
