@@ -568,33 +568,33 @@ func TestBuildDeployment_TorHasMetricsPortAndProbes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDeployment: %v", err)
 	}
-	var tor *corev1.Container
+	var torC *corev1.Container
 	for i, c := range dep.Spec.Template.Spec.Containers {
 		if c.Name == "tor" {
-			tor = &dep.Spec.Template.Spec.Containers[i]
+			torC = &dep.Spec.Template.Spec.Containers[i]
 			break
 		}
 	}
-	if tor == nil {
+	if torC == nil {
 		t.Fatal("tor container not found")
 	}
 	// containerPort
 	var metricsPortFound bool
-	for _, p := range tor.Ports {
+	for _, p := range torC.Ports {
 		if p.Name == "metrics" && p.ContainerPort == 9035 {
 			metricsPortFound = true
 		}
 	}
 	if !metricsPortFound {
-		t.Errorf("tor missing metrics containerPort 9035; got ports=%v", tor.Ports)
+		t.Errorf("tor missing metrics containerPort 9035; got ports=%v", torC.Ports)
 	}
 	for _, probe := range []struct {
 		name string
 		p    *corev1.Probe
 	}{
-		{"startup", tor.StartupProbe},
-		{"liveness", tor.LivenessProbe},
-		{"readiness", tor.ReadinessProbe},
+		{"startup", torC.StartupProbe},
+		{"liveness", torC.LivenessProbe},
+		{"readiness", torC.ReadinessProbe},
 	} {
 		if probe.p == nil || probe.p.HTTPGet == nil {
 			t.Fatalf("tor missing httpGet %sProbe", probe.name)
