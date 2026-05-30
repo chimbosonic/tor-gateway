@@ -19,7 +19,7 @@ Please report security issues privately to `agl314@chimbosonic.com` (PGP key TBD
 ### Adversary models considered
 
 1. **Cluster co-tenant** — another namespace tries to read a Gateway's key Secret or reroute traffic.
-   - Mitigations: per-namespace RBAC; operator never grants blanket `Secret` read; NetworkPolicies isolate Tor pods.
+   - Mitigations: per-namespace RBAC; operator never grants blanket `Secret` read. NetworkPolicy scoping is **not yet emitted by the operator** (tracked follow-up); scope ingress to the Tor pod (including its `MetricsPort`) with your own NetworkPolicy until then.
 2. **Compromised backend Pod** — a Pod behind an HTTPRoute is breached.
    - Mitigations: the backend cannot read keys; the proxy sidecar only forwards to `backendRefs` resolved by the controller, not to arbitrary destinations chosen by the backend.
 3. **External attacker over Tor** — public attack against the `.onion`.
@@ -35,7 +35,11 @@ All pods produced by the operator:
 - `allowPrivilegeEscalation: false`, drop `ALL` capabilities
 - `seccompProfile: { type: RuntimeDefault }`
 - Key Secrets mounted with `defaultMode: 0600`
-- `NetworkPolicy` co-emitted: egress restricted to Tor directories + named backend Services
+- Liveness / readiness / startup probes on the data-plane containers (router `/healthz` on `:8081`; Tor `MetricsPort` `/metrics` on `:9035`)
+
+### Known gaps
+
+- **NetworkPolicy is not yet emitted by the operator** (tracked follow-up). The Tor pod's `MetricsPort` exposes Prometheus-format counters (no key material, no descriptor content) on the pod IP; any in-cluster source can reach it until you scope ingress with your own NetworkPolicy or the operator-emitted policy ships.
 
 ### Known failure modes (documented, not auto-recovered)
 

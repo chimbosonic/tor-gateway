@@ -6,7 +6,7 @@ Drop in a `Gateway` of class `tor-gateway` and one or more `HTTPRoute`s, and the
 
 ## Status
 
-Alpha — `v0.1.0` is the first tagged release: installable, with signed multi-arch images + chart (see [Quickstart](#quickstart) and [Verifying signatures](#verifying-signatures)). See [the design plan](./docs/PLAN.md) and [`SECURITY.md`](./SECURITY.md).
+Alpha — `v0.3.1` is the current release: installable, with signed multi-arch images + chart (see [Quickstart](#quickstart) and [Verifying signatures](#verifying-signatures)). See [the design plan](./docs/PLAN.md) and [`SECURITY.md`](./SECURITY.md).
 
 ## Quickstart
 
