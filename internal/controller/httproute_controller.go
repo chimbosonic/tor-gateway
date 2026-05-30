@@ -267,18 +267,22 @@ func (r *HTTPRouteReconciler) updateGatewayAttachedRoutes(ctx context.Context, g
 	return r.Status().Update(ctx, gw)
 }
 
+// parentRefGroupKindIsGateway reports whether pr names a Gateway-API Gateway
+// (with nil/empty group/kind defaulting per the Gateway API spec).
+func parentRefGroupKindIsGateway(pr gwv1.ParentReference) bool {
+	if pr.Group != nil && *pr.Group != "" && string(*pr.Group) != GatewayAPIGroup {
+		return false
+	}
+	if pr.Kind != nil && *pr.Kind != "" && string(*pr.Kind) != GatewayKind {
+		return false
+	}
+	return true
+}
+
 // parentRefMatches reports whether pr resolves to the named Gateway in the
 // given namespace, defaulting Namespace to the route's namespace.
 func parentRefMatches(pr gwv1.ParentReference, gwName, gwNS, routeNS string) bool {
-	group := GatewayAPIGroup
-	if pr.Group != nil {
-		group = string(*pr.Group)
-	}
-	kind := GatewayKind
-	if pr.Kind != nil {
-		kind = string(*pr.Kind)
-	}
-	if group != GatewayAPIGroup || kind != GatewayKind {
+	if !parentRefGroupKindIsGateway(pr) {
 		return false
 	}
 	ns := routeNS

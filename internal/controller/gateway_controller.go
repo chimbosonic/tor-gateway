@@ -503,23 +503,9 @@ func (r *GatewayReconciler) ensureNetworkPolicy(
 // routeTargetsGateway reports whether route's parentRefs designate gw.
 func routeTargetsGateway(route *gwv1.HTTPRoute, gw *gwv1.Gateway) bool {
 	for _, p := range route.Spec.ParentRefs {
-		if string(p.Name) != gw.Name {
-			continue
+		if parentRefMatches(p, gw.Name, gw.Namespace, route.Namespace) {
+			return true
 		}
-		ns := route.Namespace
-		if p.Namespace != nil {
-			ns = string(*p.Namespace)
-		}
-		if ns != gw.Namespace {
-			continue
-		}
-		if p.Group != nil && *p.Group != "" && string(*p.Group) != gwv1.GroupName {
-			continue
-		}
-		if p.Kind != nil && *p.Kind != "" && string(*p.Kind) != "Gateway" {
-			continue
-		}
-		return true
 	}
 	return false
 }
@@ -625,6 +611,7 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&batchv1.Job{}).
+		Owns(&netv1.NetworkPolicy{}).
 		Watches(&policyv1alpha1.TorServicePolicy{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForServicePolicy)).
 		Watches(&policyv1alpha1.TorClientAuthPolicy{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForClientAuthPolicy)).
 		Watches(&gwv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForHTTPRoute)).
@@ -643,10 +630,7 @@ func (r *GatewayReconciler) gatewaysForHTTPRoute(_ context.Context, obj client.O
 	}
 	var reqs []reconcile.Request
 	for _, p := range route.Spec.ParentRefs {
-		if p.Group != nil && *p.Group != "" && string(*p.Group) != gwv1.GroupName {
-			continue
-		}
-		if p.Kind != nil && *p.Kind != "" && string(*p.Kind) != "Gateway" {
+		if !parentRefGroupKindIsGateway(p) {
 			continue
 		}
 		ns := route.Namespace
