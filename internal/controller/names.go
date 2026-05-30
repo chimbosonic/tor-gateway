@@ -47,6 +47,7 @@ const (
 	routerRBACSuffix      = "-router"
 	vanityRBACSuffix      = "-vanity"
 	vanityOutSecretSuffix = "-vanity-out"
+	networkPolicySuffix   = "-netpol"
 	// vanityFailedAnnotation records the prefix whose harvest exceeded its
 	// deadline so the controller does not relaunch a Job for it (this
 	// survives the Job's TTL GC). Cleared when the prefix changes.
@@ -118,6 +119,10 @@ func VanityRBACName(gw string) string { return gw + vanityRBACSuffix }
 // VanityOutSecretName is the throwaway Secret the vanity Job writes the
 // harvested keys into, before the controller promotes them into <gw>-keys.
 func VanityOutSecretName(gw string) string { return gw + vanityOutSecretSuffix }
+
+// NetworkPolicyName is the name of the per-Gateway egress NetworkPolicy
+// emitted by the operator.
+func NetworkPolicyName(gw string) string { return gw + networkPolicySuffix }
 
 // ChildLabels returns the standard label set we put on every child resource
 // of a Gateway. Used both for SetControllerReference indirection and for
