@@ -1,0 +1,329 @@
+/*
+Copyright 2026 Alexis Lowe.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+*/
+
+package controller
+
+import (
+	"crypto/rand"
+	"fmt"
+	"strconv"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
+	obconfig "github.com/chimbosonic/tor-gateway/internal/onionbalance"
+	"github.com/chimbosonic/tor-gateway/internal/tor"
+)
+
+const (
+	haRoleBackend  = "backend"
+	haRoleFrontend = "frontend"
+	haRoleKey      = "torgateway.io/role"
+)
+
+// HALabels returns the standard Mode B label set for the Gateway. The
+// Gateway-scoping label is shared with Mode A so a single NetworkPolicy
+// covers both modes.
+func HALabels(gw *gwv1.Gateway, role string) map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/name":     "tor-gateway",
+		"app.kubernetes.io/instance": gw.Name,
+		gatewayLabelKey:              gw.Name,
+		haRoleKey:                    role,
+	}
+}
+
+// Resource name helpers. Centralised so the Gateway reconciler and tests
+// agree on the spelling.
+
+func FrontendName(gw *gwv1.Gateway) string               { return gw.Name + "-frontend" }
+func BackendStatefulSetName(gw *gwv1.Gateway) string     { return gw.Name + "-backend" }
+func BackendHeadlessServiceName(gw *gwv1.Gateway) string { return gw.Name + "-backends" }
+func BackendKeySecretName(gw *gwv1.Gateway, idx int) string {
+	return fmt.Sprintf("%s-backend-%d-keys", gw.Name, idx)
+}
+func OnionbalanceConfigMapName(gw *gwv1.Gateway) string {
+	return gw.Name + "-onionbalance-config"
+}
+
+// BuildBackendKeySecret renders a per-pod Secret holding the ed25519 key
+// for backend index idx. The hostname field is intentionally left
+// unpopulated: tor-init writes it back on first pod start (mirroring the
+// Mode A <gw>-keys convention).
+func BuildBackendKeySecret(gw *gwv1.Gateway, idx int, kp *tor.KeyPair, scheme *runtime.Scheme) (*corev1.Secret, error) {
+	if kp == nil {
+		var err error
+		kp, err = tor.GenerateKeyPair(rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("generate backend key: %w", err)
+		}
+	}
+	s := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      BackendKeySecretName(gw, idx),
+			Namespace: gw.Namespace,
+			Labels:    HALabels(gw, haRoleBackend),
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"hs_ed25519_secret_key": kp.SecretKeyFile(),
+			"hs_ed25519_public_key": kp.PublicKeyFile(),
+		},
+	}
+	if err := controllerutil.SetControllerReference(gw, s, scheme); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// BuildBackendHeadlessService renders the headless Service that gives the
+// StatefulSet pods stable DNS names.
+func BuildBackendHeadlessService(gw *gwv1.Gateway, scheme *runtime.Scheme) (*corev1.Service, error) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      BackendHeadlessServiceName(gw),
+			Namespace: gw.Namespace,
+			Labels:    HALabels(gw, haRoleBackend),
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: corev1.ClusterIPNone,
+			Selector:  HALabels(gw, haRoleBackend),
+			Ports: []corev1.ServicePort{
+				{Name: "tor", Port: loopbackTargetPort, TargetPort: intstr.FromInt(loopbackTargetPort)},
+			},
+		},
+	}
+	if err := controllerutil.SetControllerReference(gw, svc, scheme); err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
+// BuildBackendStatefulSet renders the backend Tor StatefulSet. Each
+// replica gets its own per-pod ed25519 key Secret projected into a
+// single Volume at /var/lib/tor-keys/<i>/; tor-init reads POD_NAME from
+// the downward API, parses the trailing index, and copies the right
+// pair into the HSDir. PoW directives are unconditionally omitted on
+// backends per the spec (see onionbalance#13).
+func BuildBackendStatefulSet(
+	gw *gwv1.Gateway,
+	pol *policyv1alpha1.OnionBalancePolicy,
+	master tor.OnionAddress,
+	images RuntimeImages,
+	scheme *runtime.Scheme,
+) (*appsv1.StatefulSet, error) {
+	replicas := pol.Spec.Replicas
+	labels := HALabels(gw, haRoleBackend)
+
+	// Pointer-to-literal locals; using ptr.To(true) trips modernize's
+	// newexpr rule, whose suggested rewrite to new(T) silently swaps in
+	// the zero value and would weaken pod security.
+	nonRoot := true
+	uid := int64(65532)
+
+	pod := corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Labels: labels},
+		Spec: corev1.PodSpec{
+			ServiceAccountName: gw.Name,
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsNonRoot:   &nonRoot,
+				RunAsUser:      &uid,
+				FSGroup:        &uid,
+				SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+			},
+			InitContainers: []corev1.Container{{
+				Name:  initContainerName,
+				Image: images.TorInit,
+				Args: []string{
+					"--hs-dir=/var/lib/tor/hs",
+					"--ob-master-address=" + master.String(),
+					"--per-pod-keys-base=/var/lib/tor-keys",
+				},
+				Env: []corev1.EnvVar{{
+					Name: "POD_NAME",
+					ValueFrom: &corev1.EnvVarSource{
+						FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+					},
+				}},
+				VolumeMounts:    backendInitVolumeMounts(),
+				SecurityContext: haHardenedSecurityContext(),
+			}},
+			Containers: []corev1.Container{
+				{
+					Name:            torContainerName,
+					Image:           images.Tor,
+					Args:            []string{"-f", "/etc/tor/torrc"},
+					Ports:           []corev1.ContainerPort{{Name: "metrics", ContainerPort: torMetricsPort}},
+					ReadinessProbe:  torReadinessProbeHA(),
+					LivenessProbe:   torLivenessProbeHA(),
+					StartupProbe:    torStartupProbeHA(),
+					VolumeMounts:    backendTorVolumeMounts(),
+					SecurityContext: haHardenedSecurityContext(),
+					Resources:       derefResources(pol.Spec.BackendResources),
+				},
+				{
+					Name:  routerContainer,
+					Image: images.Router,
+					Args: []string{
+						"--gateway=" + gw.Name,
+						"--namespace=" + gw.Namespace,
+					},
+					ReadinessProbe:  routerHealthzProbeHA(),
+					LivenessProbe:   routerHealthzProbeHA(),
+					SecurityContext: haHardenedSecurityContext(),
+				},
+			},
+			Volumes: backendPodVolumes(gw, replicas),
+			TopologySpreadConstraints: []corev1.TopologySpreadConstraint{{
+				MaxSkew:           1,
+				TopologyKey:       "kubernetes.io/hostname",
+				WhenUnsatisfiable: corev1.ScheduleAnyway,
+				LabelSelector:     &metav1.LabelSelector{MatchLabels: HALabels(gw, haRoleBackend)},
+			}},
+		},
+	}
+	ss := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      BackendStatefulSetName(gw),
+			Namespace: gw.Namespace,
+			Labels:    labels,
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas:            &replicas,
+			Selector:            &metav1.LabelSelector{MatchLabels: labels},
+			ServiceName:         BackendHeadlessServiceName(gw),
+			Template:            pod,
+			PodManagementPolicy: appsv1.ParallelPodManagement,
+		},
+	}
+	if err := controllerutil.SetControllerReference(gw, ss, scheme); err != nil {
+		return nil, err
+	}
+	return ss, nil
+}
+
+// BuildOnionbalanceConfigMap renders the initial onionbalance config
+// ConfigMap with no backends. The frontend's obrefresh sidecar overwrites
+// the file on every backend Secret event; the ConfigMap exists so the
+// frontend pod has a non-empty file to read on first start.
+func BuildOnionbalanceConfigMap(gw *gwv1.Gateway, masterAddr tor.OnionAddress, scheme *runtime.Scheme) (*corev1.ConfigMap, error) {
+	rendered, err := obconfig.Render(masterAddr, nil, "/etc/onionbalance/keys/hs_ed25519_secret_key")
+	if err != nil {
+		return nil, err
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      OnionbalanceConfigMapName(gw),
+			Namespace: gw.Namespace,
+			Labels:    HALabels(gw, haRoleFrontend),
+		},
+		Data: map[string]string{
+			"config.yaml": rendered,
+		},
+	}
+	if err := controllerutil.SetControllerReference(gw, cm, scheme); err != nil {
+		return nil, err
+	}
+	return cm, nil
+}
+
+func backendInitVolumeMounts() []corev1.VolumeMount {
+	return []corev1.VolumeMount{
+		{Name: "hs", MountPath: hsDirMountPath},
+		{Name: "keys", MountPath: "/var/lib/tor-keys", ReadOnly: true},
+	}
+}
+
+func backendTorVolumeMounts() []corev1.VolumeMount {
+	return []corev1.VolumeMount{
+		{Name: "hs", MountPath: hsDirMountPath},
+		{Name: "torrc", MountPath: configMountPath, ReadOnly: true},
+	}
+}
+
+func backendPodVolumes(gw *gwv1.Gateway, replicas int32) []corev1.Volume {
+	sources := make([]corev1.VolumeProjection, 0, int(replicas))
+	for i := range replicas {
+		sources = append(sources, corev1.VolumeProjection{
+			Secret: &corev1.SecretProjection{
+				LocalObjectReference: corev1.LocalObjectReference{Name: BackendKeySecretName(gw, int(i))},
+				Items: []corev1.KeyToPath{
+					{Key: "hs_ed25519_secret_key", Path: strconv.Itoa(int(i)) + "/hs_ed25519_secret_key"},
+					{Key: "hs_ed25519_public_key", Path: strconv.Itoa(int(i)) + "/hs_ed25519_public_key"},
+				},
+			},
+		})
+	}
+	return []corev1.Volume{
+		{Name: "hs", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "keys", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: sources}}},
+		{Name: "torrc", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: TorrcConfigMapName(gw.Name)},
+		}}},
+	}
+}
+
+// haHardenedSecurityContext returns a container SecurityContext with the
+// minimal privilege set required by all Mode B containers.
+func haHardenedSecurityContext() *corev1.SecurityContext {
+	// Pointer-to-literal locals; using ptr.To(false/true) trips modernize's
+	// newexpr rule, whose suggested rewrite to new(T) silently substitutes
+	// the zero value and would weaken security.
+	allowEsc := false
+	readOnly := true
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: &allowEsc,
+		ReadOnlyRootFilesystem:   &readOnly,
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+}
+
+// derefResources returns the given ResourceRequirements, substituting a
+// conservative default when nil.
+func derefResources(r *corev1.ResourceRequirements) corev1.ResourceRequirements {
+	if r == nil {
+		return corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("50m"),
+				corev1.ResourceMemory: resource.MustParse("64Mi"),
+			},
+		}
+	}
+	return *r
+}
+
+func torReadinessProbeHA() *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler:  corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/metrics", Port: intstr.FromInt(torMetricsPort)}},
+		PeriodSeconds: 10,
+	}
+}
+
+func torLivenessProbeHA() *corev1.Probe { return torReadinessProbeHA() }
+
+func torStartupProbeHA() *corev1.Probe {
+	p := torReadinessProbeHA()
+	p.FailureThreshold = 30
+	return p
+}
+
+func routerHealthzProbeHA() *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler:  corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromInt(routerProbePort)}},
+		PeriodSeconds: 10,
+	}
+}

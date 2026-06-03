@@ -1,0 +1,460 @@
+/*
+Copyright 2026 Alexis Lowe.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+*/
+
+package controller
+
+import (
+	"crypto/rand"
+	"slices"
+	"strings"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
+	"github.com/chimbosonic/tor-gateway/internal/tor"
+)
+
+func samplePolicy(replicas int32) *policyv1alpha1.OnionBalancePolicy {
+	return &policyv1alpha1.OnionBalancePolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ha-policy",
+			Namespace: testGwNamespace,
+		},
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			Replicas: replicas,
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{
+				Name: "master-keys",
+			},
+		},
+	}
+}
+
+func sampleMasterAddr(t *testing.T) tor.OnionAddress {
+	t.Helper()
+	kp, err := tor.GenerateKeyPair(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return kp.OnionAddress()
+}
+
+// --- BuildBackendKeySecret ---
+
+func TestBuildBackendKeySecret_NamingAndLabels(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+
+	s, err := BuildBackendKeySecret(gw, 2, nil, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "blog-backend-2-keys"
+	if s.Name != want {
+		t.Fatalf("name = %q, want %q", s.Name, want)
+	}
+	if s.Namespace != testGwNamespace {
+		t.Fatalf("namespace = %q, want %q", s.Namespace, testGwNamespace)
+	}
+	if s.Labels[haRoleKey] != haRoleBackend {
+		t.Fatalf("label %s = %q, want %q", haRoleKey, s.Labels[haRoleKey], haRoleBackend)
+	}
+	if s.Labels[gatewayLabelKey] != gw.Name {
+		t.Fatalf("label %s = %q, want %q", gatewayLabelKey, s.Labels[gatewayLabelKey], gw.Name)
+	}
+}
+
+func TestBuildBackendKeySecret_DataAndNoHostname(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+
+	kp, err := tor.GenerateKeyPair(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := BuildBackendKeySecret(gw, 0, kp, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"hs_ed25519_secret_key", "hs_ed25519_public_key"} {
+		if len(s.Data[key]) == 0 {
+			t.Fatalf("Secret missing populated data[%q]", key)
+		}
+	}
+	if _, ok := s.Data["hostname"]; ok {
+		t.Fatal("Secret must NOT pre-populate the hostname key")
+	}
+}
+
+func TestBuildBackendKeySecret_OwnerReference(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+
+	s, err := BuildBackendKeySecret(gw, 0, nil, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.OwnerReferences) != 1 {
+		t.Fatalf("expected 1 OwnerReference, got %d", len(s.OwnerReferences))
+	}
+	ref := s.OwnerReferences[0]
+	if ref.UID != gw.UID {
+		t.Fatalf("owner UID = %s, want %s", ref.UID, gw.UID)
+	}
+	if !*ref.Controller {
+		t.Fatal("OwnerReference must have Controller=true")
+	}
+}
+
+func TestBuildBackendKeySecret_GeneratesKeyWhenNil(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+
+	s, err := BuildBackendKeySecret(gw, 1, nil, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Data["hs_ed25519_secret_key"]) == 0 {
+		t.Fatal("auto-generated key must populate hs_ed25519_secret_key")
+	}
+}
+
+// --- BuildBackendHeadlessService ---
+
+func TestBuildBackendHeadlessService_Headless(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+
+	svc, err := BuildBackendHeadlessService(gw, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.Name != BackendHeadlessServiceName(gw) {
+		t.Fatalf("name = %q, want %q", svc.Name, BackendHeadlessServiceName(gw))
+	}
+	if svc.Spec.ClusterIP != corev1.ClusterIPNone {
+		t.Fatalf("ClusterIP = %q, want None", svc.Spec.ClusterIP)
+	}
+	if svc.Spec.Selector[haRoleKey] != haRoleBackend {
+		t.Fatalf("selector missing role=backend; got %v", svc.Spec.Selector)
+	}
+}
+
+func TestBuildBackendHeadlessService_OwnerReference(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+
+	svc, err := BuildBackendHeadlessService(gw, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(svc.OwnerReferences) != 1 || svc.OwnerReferences[0].UID != gw.UID {
+		t.Fatalf("expected Gateway owner ref, got %+v", svc.OwnerReferences)
+	}
+}
+
+// --- BuildBackendStatefulSet ---
+
+func sampleStatefulSetGateway() *gwv1.Gateway {
+	gw := sampleGateway()
+	gw.Name = "ha-gw"
+	return gw
+}
+
+func TestBuildBackendStatefulSet_ReplicasAndServiceName(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleStatefulSetGateway()
+	pol := samplePolicy(3)
+	master := sampleMasterAddr(t)
+
+	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ss.Spec.Replicas == nil || *ss.Spec.Replicas != 3 {
+		t.Fatalf("Replicas = %v, want 3", ss.Spec.Replicas)
+	}
+	if ss.Spec.ServiceName != BackendHeadlessServiceName(gw) {
+		t.Fatalf("ServiceName = %q, want %q", ss.Spec.ServiceName, BackendHeadlessServiceName(gw))
+	}
+}
+
+func TestBuildBackendStatefulSet_InitContainerArgs(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleStatefulSetGateway()
+	pol := samplePolicy(2)
+	master := sampleMasterAddr(t)
+
+	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ss.Spec.Template.Spec.InitContainers) != 1 {
+		t.Fatalf("expected 1 init container, got %d", len(ss.Spec.Template.Spec.InitContainers))
+	}
+	init := ss.Spec.Template.Spec.InitContainers[0]
+	args := init.Args
+
+	// Must include master address flag.
+	found := false
+	for _, a := range args {
+		if strings.HasPrefix(a, "--ob-master-address=") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("init container args missing --ob-master-address; got %v", args)
+	}
+
+	// Must include per-pod-keys-base flag.
+	if !slices.Contains(args, "--per-pod-keys-base=/var/lib/tor-keys") {
+		t.Fatalf("init container args missing --per-pod-keys-base; got %v", args)
+	}
+
+	// Must NOT include --src (would clobber per-pod keys).
+	for _, a := range args {
+		if a == "--src" || strings.HasPrefix(a, "--src=") {
+			t.Fatalf("init container must NOT pass --src; got %v", args)
+		}
+	}
+}
+
+func TestBuildBackendStatefulSet_InitContainerDownwardAPI(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleStatefulSetGateway()
+	pol := samplePolicy(2)
+	master := sampleMasterAddr(t)
+
+	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	init := ss.Spec.Template.Spec.InitContainers[0]
+	found := false
+	for _, e := range init.Env {
+		if e.Name == "POD_NAME" && e.ValueFrom != nil && e.ValueFrom.FieldRef != nil &&
+			e.ValueFrom.FieldRef.FieldPath == "metadata.name" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("init container missing POD_NAME downward API env; got %v", init.Env)
+	}
+}
+
+func TestBuildBackendStatefulSet_RouterSidecarPresent(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleStatefulSetGateway()
+	pol := samplePolicy(2)
+	master := sampleMasterAddr(t)
+
+	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(ss.Spec.Template.Spec.Containers))
+	for _, c := range ss.Spec.Template.Spec.Containers {
+		names = append(names, c.Name)
+	}
+	if !slices.Contains(names, routerContainer) {
+		t.Fatalf("router sidecar not present; containers = %v", names)
+	}
+	if !slices.Contains(names, torContainerName) {
+		t.Fatalf("tor container not present; containers = %v", names)
+	}
+}
+
+func TestBuildBackendStatefulSet_ProjectedVolumeHasReplicasSources(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleStatefulSetGateway()
+	replicas := int32(3)
+	pol := samplePolicy(replicas)
+	master := sampleMasterAddr(t)
+
+	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keysVol *corev1.Volume
+	for i := range ss.Spec.Template.Spec.Volumes {
+		if ss.Spec.Template.Spec.Volumes[i].Name == "keys" {
+			keysVol = &ss.Spec.Template.Spec.Volumes[i]
+			break
+		}
+	}
+	if keysVol == nil || keysVol.Projected == nil {
+		t.Fatal("keys volume must be a Projected volume")
+	}
+	if int32(len(keysVol.Projected.Sources)) != replicas {
+		t.Fatalf("projected volume has %d sources, want %d", len(keysVol.Projected.Sources), replicas)
+	}
+	// Verify each source references the right secret name and paths.
+	for i := range replicas {
+		src := keysVol.Projected.Sources[i]
+		if src.Secret == nil {
+			t.Fatalf("source[%d] is not a Secret projection", i)
+		}
+		want := BackendKeySecretName(gw, int(i))
+		if src.Secret.Name != want {
+			t.Fatalf("source[%d].Secret.Name = %q, want %q", i, src.Secret.Name, want)
+		}
+	}
+}
+
+func TestBuildBackendStatefulSet_TopologySpreadBestEffort(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleStatefulSetGateway()
+	pol := samplePolicy(2)
+	master := sampleMasterAddr(t)
+
+	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ss.Spec.Template.Spec.TopologySpreadConstraints) != 1 {
+		t.Fatalf("expected 1 TopologySpreadConstraint, got %d", len(ss.Spec.Template.Spec.TopologySpreadConstraints))
+	}
+	tsc := ss.Spec.Template.Spec.TopologySpreadConstraints[0]
+	if tsc.WhenUnsatisfiable != corev1.ScheduleAnyway {
+		t.Fatalf("WhenUnsatisfiable = %q, want ScheduleAnyway", tsc.WhenUnsatisfiable)
+	}
+}
+
+func TestBuildBackendStatefulSet_OwnerReference(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleStatefulSetGateway()
+	pol := samplePolicy(2)
+	master := sampleMasterAddr(t)
+
+	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ss.OwnerReferences) != 1 || ss.OwnerReferences[0].UID != gw.UID {
+		t.Fatalf("expected Gateway owner ref, got %+v", ss.OwnerReferences)
+	}
+}
+
+func TestBuildBackendStatefulSet_ParallelPodManagement(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleStatefulSetGateway()
+	pol := samplePolicy(2)
+	master := sampleMasterAddr(t)
+
+	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ss.Spec.PodManagementPolicy != "Parallel" {
+		t.Fatalf("PodManagementPolicy = %q, want Parallel", ss.Spec.PodManagementPolicy)
+	}
+}
+
+func TestBuildBackendStatefulSet_Hardening(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleStatefulSetGateway()
+	pol := samplePolicy(2)
+	master := sampleMasterAddr(t)
+
+	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := ss.Spec.Template.Spec
+	for _, c := range append(tpl.InitContainers, tpl.Containers...) {
+		if c.SecurityContext == nil {
+			t.Fatalf("container %s missing SecurityContext", c.Name)
+		}
+		if c.SecurityContext.AllowPrivilegeEscalation == nil || *c.SecurityContext.AllowPrivilegeEscalation {
+			t.Fatalf("container %s must deny privilege escalation", c.Name)
+		}
+		if c.SecurityContext.ReadOnlyRootFilesystem == nil || !*c.SecurityContext.ReadOnlyRootFilesystem {
+			t.Fatalf("container %s must have ReadOnlyRootFilesystem=true", c.Name)
+		}
+		if c.SecurityContext.Capabilities == nil || !hasCap(c.SecurityContext.Capabilities.Drop, "ALL") {
+			t.Fatalf("container %s must drop ALL capabilities", c.Name)
+		}
+	}
+	if tpl.SecurityContext == nil || tpl.SecurityContext.SeccompProfile == nil ||
+		tpl.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Fatal("pod must use RuntimeDefault seccomp profile")
+	}
+}
+
+// --- BuildOnionbalanceConfigMap ---
+
+func TestBuildOnionbalanceConfigMap_ContainsServicesAndEmptyInstances(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	master := sampleMasterAddr(t)
+
+	cm, err := BuildOnionbalanceConfigMap(gw, master, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.Name != OnionbalanceConfigMapName(gw) {
+		t.Fatalf("name = %q, want %q", cm.Name, OnionbalanceConfigMapName(gw))
+	}
+	data, ok := cm.Data["config.yaml"]
+	if !ok {
+		t.Fatal("ConfigMap missing data[config.yaml]")
+	}
+	if !strings.Contains(data, "services:") {
+		t.Fatalf("config.yaml missing 'services:' key; got:\n%s", data)
+	}
+	if !strings.Contains(data, "instances: []") {
+		t.Fatalf("config.yaml missing 'instances: []' for zero backends; got:\n%s", data)
+	}
+}
+
+func TestBuildOnionbalanceConfigMap_OwnerReference(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	master := sampleMasterAddr(t)
+
+	cm, err := BuildOnionbalanceConfigMap(gw, master, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cm.OwnerReferences) != 1 || cm.OwnerReferences[0].UID != gw.UID {
+		t.Fatalf("expected Gateway owner ref, got %+v", cm.OwnerReferences)
+	}
+}
+
+func TestBuildOnionbalanceConfigMap_LabelsFrontend(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleGateway()
+	master := sampleMasterAddr(t)
+
+	cm, err := BuildOnionbalanceConfigMap(gw, master, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.Labels[haRoleKey] != haRoleFrontend {
+		t.Fatalf("label %s = %q, want frontend", haRoleKey, cm.Labels[haRoleKey])
+	}
+}
+
+// --- HALabels ---
+
+func TestHALabels_ContainsGatewayAndRole(t *testing.T) {
+	gw := sampleGateway()
+	labels := HALabels(gw, haRoleBackend)
+	if labels[gatewayLabelKey] != gw.Name {
+		t.Fatalf("label %s = %q, want %q", gatewayLabelKey, labels[gatewayLabelKey], gw.Name)
+	}
+	if labels[haRoleKey] != haRoleBackend {
+		t.Fatalf("label %s = %q, want %q", haRoleKey, labels[haRoleKey], haRoleBackend)
+	}
+}
