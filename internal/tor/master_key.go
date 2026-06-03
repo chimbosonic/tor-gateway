@@ -51,10 +51,7 @@ func ValidateMasterKeySecret(data map[string][]byte) (*KeyPair, error) {
 	derivedPoint := new(edwards25519.Point).ScalarBaseMult(scalar)
 	derivedPub := derivedPoint.Bytes()
 
-	suppliedPub, err := ParsePublicKey(publicBytes)
-	if err != nil {
-		return nil, fmt.Errorf("re-parse public key: %w", err)
-	}
+	suppliedPub := publicBytes[headerLen:]
 
 	if subtle.ConstantTimeCompare(derivedPub, suppliedPub) != 1 {
 		return nil, ErrMasterKeyMismatch
