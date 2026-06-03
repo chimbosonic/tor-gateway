@@ -207,3 +207,18 @@ func TestBuildNetworkPolicy_RejectsEmptyPodSelector(t *testing.T) {
 		t.Fatal("expected error for empty PodSelector")
 	}
 }
+
+func TestNetworkPolicySelectsBothModeBPodSets(t *testing.T) {
+	gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "blog", Namespace: "prod"}}
+	np, err := BuildNetworkPolicy(gw, nil, nil, testScheme(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := np.Spec.PodSelector.MatchLabels
+	if sel["torgateway.io/gateway"] != "blog" {
+		t.Errorf("expected gateway label; got %v", sel)
+	}
+	if _, ok := sel["torgateway.io/role"]; ok {
+		t.Errorf("podSelector must NOT pin role; got %v (frontend + backend pods both need to be covered)", sel)
+	}
+}
