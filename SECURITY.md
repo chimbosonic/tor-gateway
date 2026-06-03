@@ -37,6 +37,38 @@ All pods produced by the operator:
 - Key Secrets mounted with `defaultMode: 0600`
 - Liveness / readiness / startup probes on the data-plane containers (router `/healthz` on `:8081`; Tor `MetricsPort` `/metrics` on `:9035`)
 
+### Onionbalance HA (Mode B)
+
+When an `OnionBalancePolicy` targets a Gateway, the operator provisions a
+frontend onionbalance pod and a backend StatefulSet of N independent Tor
+instances. Mode-B-specific security properties:
+
+- **Master key.** The user-supplied master ed25519 key is the
+  permanent identity of the published `.onion`. Treat the Secret the
+  same way you treat the Mode A `<gw>-keys` Secret: never logged, never
+  in ConfigMaps, `defaultMode: 0400` on the volume mount.
+- **Backend keys.** Operator-generated per-pod Secrets. A backend key
+  compromise is contained — the master is unaffected; the compromised
+  backend's `.onion` simply rotates out of the descriptor pool when the
+  operator regenerates its Secret (manual today; just delete the
+  Secret and the reconciler will regenerate).
+- **PoW.** `HiddenServicePoWDefensesEnabled` is **force-disabled** on
+  backends regardless of `TorServicePolicy.poWDefensesEnabled`. Reason:
+  upstream onionbalance has no PoW propagation today
+  (gitlab.torproject.org/tpo/onion-services/onionbalance#13) and
+  enabling PoW on a backend without prioritisation makes the queue
+  worse than no PoW.
+- **Frontend SPOF.** The frontend pod is a single point of failure for
+  descriptor publication. K8s Deployment auto-restart is the v1
+  mitigation (brief outage during pod restart, no `.onion` change).
+  Upstream's recommended HA story for the frontend itself is "deploy a
+  second frontend with a separate `.onion`" — explicitly out of scope
+  for v1; it's a different feature shape.
+- **Vanguards descriptor size.** Onionbalance descriptors with the
+  maximum number of intro points can exceed Vanguards' default 30 kB
+  cap. v1 documents but does not enforce. If you set `replicas` close
+  to the cap (8) AND run Vanguards, monitor descriptor sizes.
+
 ### Known gaps
 
 - **NetworkPolicy is opt-out per-Gateway** (v0.3.2). The operator emits a per-Gateway egress NetworkPolicy whitelisting DNS, kube-apiserver, the resolved HTTPRoute backend Services (cross-namespace gated by ReferenceGrant), and the public internet. The `clusterPodCIDRs` chart value MUST be set to your cluster's pod CIDR(s) for cluster-lateral lockdown to bite — without it, the broad public-internet rule allows in-cluster destinations too. CNIs without NetworkPolicy support (e.g. default Flannel) silently no-op the policy.
