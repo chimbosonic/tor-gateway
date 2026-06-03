@@ -22,19 +22,23 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/chimbosonic/tor-gateway/internal/tor"
 )
 
 func main() {
 	var (
-		src           string
-		dst           string
-		clientAuthSrc string
+		src             string
+		dst             string
+		clientAuthSrc   string
+		obMasterAddress string
+		perPodKeysBase  string
 	)
 	flag.StringVar(&src, "src", "/etc/tor-keys", "directory containing the mounted key Secret")
 	flag.StringVar(&dst, "dst", "/var/lib/tor/hs", "HiddenServiceDir to populate")
@@ -42,22 +46,42 @@ func main() {
 		"optional directory containing client-auth Secret entries; when set, "+
 			"each non-dotfile entry is written as <label>.auth into "+
 			"<dst>/authorized_clients/")
+	flag.StringVar(&obMasterAddress, "ob-master-address", "",
+		"if set, write <HSDir>/ob_config containing MasterOnionAddress <value>.onion (HA backend mode)")
+	flag.StringVar(&perPodKeysBase, "per-pod-keys-base", "",
+		"if set, copy hs_ed25519_*_key from <base>/<index>/ into HSDir; "+
+			"<index> is the trailing -N of $POD_NAME (HA backend mode)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	if err := run(src, dst, clientAuthSrc); err != nil {
+	if err := run(src, dst, clientAuthSrc, perPodKeysBase, obMasterAddress); err != nil {
 		slog.Error("tor-init failed", "err", err)
 		os.Exit(1)
 	}
-	slog.Info("tor-init ok", "src", src, "dst", dst, "client_auth", clientAuthSrc != "")
+	slog.Info("tor-init ok", "src", src, "dst", dst,
+		"client_auth", clientAuthSrc != "",
+		"per_pod_keys", perPodKeysBase != "",
+		"ob_master", obMasterAddress != "")
 }
 
-func run(src, dst, clientAuthSrc string) error {
+func run(src, dst, clientAuthSrc, perPodKeysBase, obMasterAddress string) error {
 	if err := os.MkdirAll(dst, tor.HiddenServiceDirMode); err != nil {
 		return err
 	}
+
+	if perPodKeysBase != "" {
+		podName := os.Getenv("POD_NAME")
+		if podName == "" {
+			return fmt.Errorf("--per-pod-keys-base requires POD_NAME env var")
+		}
+		if err := copyPerPodKeys(perPodKeysBase, podName, dst); err != nil {
+			return fmt.Errorf("per-pod-keys: %w", err)
+		}
+		slog.Info("tor-init: per-pod keys copied", "pod", podName, "base", perPodKeysBase)
+	}
+
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return err
@@ -96,7 +120,47 @@ func run(src, dst, clientAuthSrc string) error {
 			slog.Warn("tor-init: some client-auth entries skipped", "err", err)
 		}
 	}
-	return tor.FixPermissions(dst)
+
+	if err := tor.FixPermissions(dst); err != nil {
+		return err
+	}
+
+	if obMasterAddress != "" {
+		if err := writeObConfig(dst, obMasterAddress); err != nil {
+			return fmt.Errorf("ob_config: %w", err)
+		}
+		slog.Info("tor-init: ob_config written", "master", obMasterAddress)
+	}
+
+	return nil
+}
+
+func writeObConfig(hsDir, addr string) error {
+	addr = strings.TrimSpace(addr)
+	if !strings.HasSuffix(addr, ".onion") {
+		addr += ".onion"
+	}
+	obConfigPath := filepath.Join(hsDir, "ob_config")
+	return os.WriteFile(obConfigPath, []byte("MasterOnionAddress "+addr+"\n"), 0o400)
+}
+
+func copyPerPodKeys(base, podName, hsDir string) error {
+	dash := strings.LastIndexByte(podName, '-')
+	if dash < 0 {
+		return fmt.Errorf("POD_NAME %q has no trailing -N", podName)
+	}
+	idx := podName[dash+1:]
+	src := filepath.Join(base, idx)
+	for _, name := range []string{"hs_ed25519_secret_key", "hs_ed25519_public_key"} {
+		data, err := os.ReadFile(filepath.Join(src, name))
+		if err != nil {
+			return fmt.Errorf("read %s: %w", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(hsDir, name), data, 0o600); err != nil {
+			return fmt.Errorf("write %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func copyFile(srcPath, dstPath string) error {
