@@ -30,6 +30,7 @@ TORINIT_IMG ?= $(REGISTRY)/tor-gateway-tor-init:$(IMAGE_TAG)
 TOR_IMAGE_TAG ?= 0.4.9
 TOR_IMG ?= $(REGISTRY)/tor:$(TOR_IMAGE_TAG)
 MKP224O_IMG ?= $(REGISTRY)/mkp224o:$(IMAGE_TAG)
+ONIONBALANCE_IMG ?= $(REGISTRY)/tor-gateway-onionbalance:$(IMAGE_TAG)
 VANITYFINALIZE_IMG ?= $(REGISTRY)/tor-gateway-vanity-finalize:$(IMAGE_TAG)
 IMG ?= $(MANAGER_IMG)
 
@@ -183,7 +184,7 @@ run: manifests generate fmt vet ## Run the manager from your host.
 
 # Build all container images. Defaults to docker; override via CONTAINER_TOOL=podman.
 .PHONY: images
-images: image-manager image-router image-obrefresh image-tor-init image-tor image-mkp224o image-vanity-finalize ## Build all container images.
+images: image-manager image-router image-obrefresh image-tor-init image-tor image-mkp224o image-onionbalance image-vanity-finalize ## Build all container images.
 
 .PHONY: image-manager
 image-manager:
@@ -209,6 +210,10 @@ image-tor:
 image-mkp224o:
 	$(CONTAINER_TOOL) build -t $(MKP224O_IMG) images/mkp224o
 
+.PHONY: image-onionbalance
+image-onionbalance:
+	$(CONTAINER_TOOL) build -t $(ONIONBALANCE_IMG) images/onionbalance
+
 .PHONY: image-vanity-finalize
 image-vanity-finalize:
 	$(CONTAINER_TOOL) build --build-arg BINARY=vanity-finalize -t $(VANITYFINALIZE_IMG) .
@@ -228,6 +233,7 @@ docker-push: ## Push all images.
 	$(CONTAINER_TOOL) push $(TORINIT_IMG)
 	$(CONTAINER_TOOL) push $(TOR_IMG)
 	$(CONTAINER_TOOL) push $(MKP224O_IMG)
+	$(CONTAINER_TOOL) push $(ONIONBALANCE_IMG)
 	$(CONTAINER_TOOL) push $(VANITYFINALIZE_IMG)
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple

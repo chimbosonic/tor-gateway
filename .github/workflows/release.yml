@@ -26,7 +26,8 @@ jobs:
           - { name: tor-gateway-obrefresh,context: ".",          file: Dockerfile,            build_args: "BINARY=obrefresh", tag: "" }
           - { name: tor-gateway-tor-init, context: ".",          file: Dockerfile,            build_args: "BINARY=tor-init",  tag: "" }
           - { name: tor,                  context: "images/tor", file: images/tor/Dockerfile, build_args: "",                 tag: "0.4.9" }
-          - { name: mkp224o,                     context: "images/mkp224o", file: images/mkp224o/Dockerfile, build_args: "",                       tag: "" }
+          - { name: mkp224o,                     context: "images/mkp224o",        file: images/mkp224o/Dockerfile,        build_args: "",                       tag: "" }
+          - { name: tor-gateway-onionbalance,   context: "images/onionbalance",   file: images/onionbalance/Dockerfile,   build_args: "",                       tag: "" }
           - { name: tor-gateway-vanity-finalize, context: ".",              file: Dockerfile,                build_args: "BINARY=vanity-finalize", tag: "" }
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
