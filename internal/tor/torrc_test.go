@@ -241,6 +241,54 @@ func TestValidate_RejectsMetricsPortWithoutPolicy(t *testing.T) {
 	}
 }
 
+func TestRenderBackendOnionbalanceInstance(t *testing.T) {
+	cfg := TorrcConfig{
+		LogLevel:         "notice",
+		HiddenServiceDir: "/var/lib/tor/hs",
+		DataDirectory:    "/var/lib/tor/data",
+		HiddenServicePort: PortMapping{
+			VirtualPort: 80,
+			TargetHost:  "127.0.0.1",
+			TargetPort:  9080,
+		},
+		PoWDefensesEnabled:   true, // intentionally true — backend variant MUST override
+		OnionbalanceInstance: true,
+	}
+	out, err := Render(&cfg)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(out, "HiddenServiceOnionbalanceInstance 1") {
+		t.Errorf("expected HiddenServiceOnionbalanceInstance 1 in output:\n%s", out)
+	}
+	for _, denied := range []string{"HiddenServicePoWDefensesEnabled", "HiddenServiceEnableIntroDoSDefense"} {
+		if strings.Contains(out, denied) {
+			t.Errorf("backend variant must omit %s; got:\n%s", denied, out)
+		}
+	}
+}
+
+func TestRenderNonBackendStillHonoursPoW(t *testing.T) {
+	cfg := TorrcConfig{
+		LogLevel:         "notice",
+		HiddenServiceDir: "/var/lib/tor/hs",
+		DataDirectory:    "/var/lib/tor/data",
+		HiddenServicePort: PortMapping{
+			VirtualPort: 80,
+			TargetHost:  "127.0.0.1",
+			TargetPort:  9080,
+		},
+		PoWDefensesEnabled: true,
+	}
+	out, err := Render(&cfg)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(out, "HiddenServicePoWDefensesEnabled 1") {
+		t.Errorf("non-backend variant must still emit PoW directives:\n%s", out)
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || (len(sub) > 0 && (indexOf(s, sub) >= 0)))
 }

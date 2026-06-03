@@ -68,6 +68,11 @@ type TorrcConfig struct {
 	// pass user-controlled input here. Sorted alphabetically on render
 	// for deterministic output.
 	ExtraDirectives map[string]string
+
+	// OnionbalanceInstance, when true, emits HiddenServiceOnionbalanceInstance 1
+	// inside the HiddenService block AND unconditionally omits the PoW
+	// directives (PoWDefensesEnabled is ignored). Used by backend pods in HA mode.
+	OnionbalanceInstance bool
 }
 
 // PortMapping is a single HiddenServicePort target.
@@ -171,8 +176,11 @@ func Render(c *TorrcConfig) (string, error) {
 		c.HiddenServicePort.TargetHost,
 		c.HiddenServicePort.TargetPort,
 	)
+	if c.OnionbalanceInstance {
+		b.WriteString("HiddenServiceOnionbalanceInstance 1\n")
+	}
 
-	if c.PoWDefensesEnabled {
+	if c.PoWDefensesEnabled && !c.OnionbalanceInstance {
 		b.WriteString("HiddenServiceEnableIntroDoSDefense 1\n")
 		b.WriteString("HiddenServicePoWDefensesEnabled 1\n")
 	}
