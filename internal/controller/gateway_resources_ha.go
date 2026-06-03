@@ -273,9 +273,63 @@ func backendPodVolumes(gw *gwv1.Gateway, replicas int32) []corev1.Volume {
 		{Name: "hs", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: "keys", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: sources}}},
 		{Name: "torrc", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
-			LocalObjectReference: corev1.LocalObjectReference{Name: TorrcConfigMapName(gw.Name)},
+			LocalObjectReference: corev1.LocalObjectReference{Name: BackendTorrcConfigMapName(gw)},
 		}}},
 	}
+}
+
+// BackendTorrcConfigMapName returns the name of the ConfigMap holding the
+// backend Tor torrc.
+func BackendTorrcConfigMapName(gw *gwv1.Gateway) string {
+	return gw.Name + "-backend-torrc"
+}
+
+// BuildBackendTorrcConfigMap renders the torrc for backend Tor instances.
+// Identical to Mode A's torrc but with OnionbalanceInstance=true (which
+// emits HiddenServiceOnionbalanceInstance 1 and unconditionally omits
+// the PoW directives — see onionbalance#13).
+func BuildBackendTorrcConfigMap(
+	gw *gwv1.Gateway,
+	pol *policyv1alpha1.OnionBalancePolicy,
+	eff EffectiveServicePolicy,
+	auth EffectiveClientAuth,
+	scheme *runtime.Scheme,
+) (*corev1.ConfigMap, error) {
+	cfg := &tor.TorrcConfig{
+		HiddenServiceDir:     hsServiceDir,
+		DataDirectory:        torDataDir,
+		LogLevel:             eff.LogLevel,
+		PoWDefensesEnabled:   eff.PoWDefensesEnabled,
+		OnionbalanceInstance: true,
+		HiddenServicePort: tor.PortMapping{
+			VirtualPort: 80,
+			TargetHost:  loopbackTargetHost,
+			TargetPort:  loopbackTargetPort,
+		},
+		MetricsPort:       torMetricsPort,
+		MetricsPortPolicy: "accept 0.0.0.0/0",
+	}
+	if auth.Enabled {
+		cfg.ClientAuthDir = hsServiceDir + "/" + tor.AuthorizedClientsSubdir
+	}
+	rendered, err := tor.Render(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("render backend torrc: %w", err)
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      BackendTorrcConfigMapName(gw),
+			Namespace: gw.Namespace,
+			Labels:    HALabels(gw, haRoleBackend),
+		},
+		Data: map[string]string{
+			"torrc": rendered,
+		},
+	}
+	if err := controllerutil.SetControllerReference(gw, cm, scheme); err != nil {
+		return nil, err
+	}
+	return cm, nil
 }
 
 // haHardenedSecurityContext returns a container SecurityContext with the

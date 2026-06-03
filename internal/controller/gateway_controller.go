@@ -63,13 +63,14 @@ type GatewayReconciler struct {
 // +kubebuilder:rbac:groups=policy.torgateway.io,resources=torservicepolicies,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups="",resources=configmaps;services,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
-// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
 
 func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("gateway", req.NamespacedName)
@@ -637,6 +638,22 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 		return fmt.Errorf("frontend torrc ConfigMap: %w", err)
 	}
 
+	backendPolicy, err := r.findEffectivePolicy(ctx, gw)
+	if err != nil {
+		return fmt.Errorf("find effective policy for backend torrc: %w", err)
+	}
+	backendAuth, err := r.findEffectiveClientAuth(ctx, gw)
+	if err != nil {
+		return fmt.Errorf("find effective client auth for backend torrc: %w", err)
+	}
+	backendTorrc, err := BuildBackendTorrcConfigMap(gw, pol, backendPolicy, backendAuth, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHAConfigMap(ctx, backendTorrc); err != nil {
+		return fmt.Errorf("backend torrc ConfigMap: %w", err)
+	}
+
 	ss, err := BuildBackendStatefulSet(gw, pol, master, r.Images, r.Scheme)
 	if err != nil {
 		return err
@@ -851,6 +868,7 @@ func (r *GatewayReconciler) cleanupModeBResources(ctx context.Context, gw *gwv1.
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: BackendHeadlessServiceName(gw)}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: OnionbalanceConfigMapName(gw)}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: FrontendTorrcConfigMapName(gw)}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: BackendTorrcConfigMapName(gw)}},
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: FrontendName(gw)}},
 		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: FrontendName(gw)}},
 		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: FrontendName(gw)}},
@@ -873,6 +891,7 @@ func (r *GatewayReconciler) cleanupModeBResources(ctx context.Context, gw *gwv1.
 	}
 	if gw.Annotations != nil {
 		delete(gw.Annotations, "torgateway.io/pow-override-emitted")
+		delete(gw.Annotations, "torgateway.io/last-known-replicas")
 		_ = r.Update(ctx, gw)
 	}
 	return nil

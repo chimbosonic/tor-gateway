@@ -642,3 +642,30 @@ func mapKeys[K comparable, V any](m map[K]V) []K {
 	}
 	return out
 }
+
+// --- BuildBackendTorrcConfigMap ---
+
+func TestBuildBackendTorrcConfigMap(t *testing.T) {
+	gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "blog", Namespace: "prod"}}
+	scheme := testScheme(t)
+	pol := &policyv1alpha1.OnionBalancePolicy{Spec: policyv1alpha1.OnionBalancePolicySpec{Replicas: 1}}
+	cm, err := BuildBackendTorrcConfigMap(gw, pol, EffectiveServicePolicy{
+		LogLevel:           "notice",
+		PoWDefensesEnabled: true,
+	}, EffectiveClientAuth{}, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := cm.Data["torrc"]
+	if !strings.Contains(rendered, "HiddenServiceOnionbalanceInstance 1") {
+		t.Errorf("backend torrc must include HiddenServiceOnionbalanceInstance 1:\n%s", rendered)
+	}
+	for _, denied := range []string{"HiddenServicePoWDefensesEnabled", "HiddenServiceEnableIntroDoSDefense"} {
+		if strings.Contains(rendered, denied) {
+			t.Errorf("backend torrc must NOT contain %s:\n%s", denied, rendered)
+		}
+	}
+	if cm.Name != "blog-backend-torrc" {
+		t.Errorf("name: %s", cm.Name)
+	}
+}
