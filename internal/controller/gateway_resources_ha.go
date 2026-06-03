@@ -138,7 +138,7 @@ func BuildBackendStatefulSet(
 	pod := corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: labels},
 		Spec: corev1.PodSpec{
-			ServiceAccountName: gw.Name,
+			ServiceAccountName: RouterRBACName(gw.Name),
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsNonRoot:   &nonRoot,
 				RunAsUser:      &uid,
@@ -285,9 +285,11 @@ func haHardenedSecurityContext() *corev1.SecurityContext {
 	// the zero value and would weaken security.
 	allowEsc := false
 	readOnly := true
+	nonRoot := true
 	return &corev1.SecurityContext{
 		AllowPrivilegeEscalation: &allowEsc,
 		ReadOnlyRootFilesystem:   &readOnly,
+		RunAsNonRoot:             &nonRoot,
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 	}
 }

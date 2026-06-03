@@ -13,6 +13,7 @@ package controller
 import (
 	"crypto/rand"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -299,7 +300,7 @@ func TestBuildBackendStatefulSet_ProjectedVolumeHasReplicasSources(t *testing.T)
 	if int32(len(keysVol.Projected.Sources)) != replicas {
 		t.Fatalf("projected volume has %d sources, want %d", len(keysVol.Projected.Sources), replicas)
 	}
-	// Verify each source references the right secret name and paths.
+	// Verify each source references the right secret name and per-index key paths.
 	for i := range replicas {
 		src := keysVol.Projected.Sources[i]
 		if src.Secret == nil {
@@ -308,6 +309,21 @@ func TestBuildBackendStatefulSet_ProjectedVolumeHasReplicasSources(t *testing.T)
 		want := BackendKeySecretName(gw, int(i))
 		if src.Secret.Name != want {
 			t.Fatalf("source[%d].Secret.Name = %q, want %q", i, src.Secret.Name, want)
+		}
+		items := src.Secret.Items
+		if len(items) != 2 {
+			t.Errorf("source[%d]: want 2 items, got %d", i, len(items))
+			continue
+		}
+		prefix := strconv.Itoa(int(i)) + "/"
+		expected := map[string]string{
+			"hs_ed25519_secret_key": prefix + "hs_ed25519_secret_key",
+			"hs_ed25519_public_key": prefix + "hs_ed25519_public_key",
+		}
+		for _, it := range items {
+			if expected[it.Key] != it.Path {
+				t.Errorf("source[%d] key %q: path %q != expected %q", i, it.Key, it.Path, expected[it.Key])
+			}
 		}
 	}
 }
@@ -358,6 +374,22 @@ func TestBuildBackendStatefulSet_ParallelPodManagement(t *testing.T) {
 	}
 	if ss.Spec.PodManagementPolicy != "Parallel" {
 		t.Fatalf("PodManagementPolicy = %q, want Parallel", ss.Spec.PodManagementPolicy)
+	}
+}
+
+func TestBuildBackendStatefulSet_ServiceAccountName(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleStatefulSetGateway()
+	pol := samplePolicy(1)
+	master := sampleMasterAddr(t)
+
+	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := RouterRBACName(gw.Name)
+	if got := ss.Spec.Template.Spec.ServiceAccountName; got != want {
+		t.Errorf("ServiceAccountName: got %q want %q", got, want)
 	}
 }
 
