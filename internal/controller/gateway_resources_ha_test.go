@@ -490,3 +490,155 @@ func TestHALabels_ContainsGatewayAndRole(t *testing.T) {
 		t.Fatalf("label %s = %q, want %q", haRoleKey, labels[haRoleKey], haRoleBackend)
 	}
 }
+
+// --- BuildFrontendServiceAccount ---
+
+func TestBuildFrontendServiceAccount(t *testing.T) {
+	gw := sampleGateway()
+	scheme := testScheme(t)
+	sa, err := BuildFrontendServiceAccount(gw, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sa.Name != "blog-frontend" || sa.Namespace != "prod" {
+		t.Errorf("name/ns: %s/%s", sa.Name, sa.Namespace)
+	}
+	if sa.Labels[haRoleKey] != "frontend" {
+		t.Errorf("role label: %v", sa.Labels)
+	}
+	if len(sa.OwnerReferences) != 1 || sa.OwnerReferences[0].Name != "blog" {
+		t.Errorf("ownerref: %v", sa.OwnerReferences)
+	}
+}
+
+// --- BuildFrontendRole ---
+
+func TestBuildFrontendRole(t *testing.T) {
+	gw := sampleGateway()
+	scheme := testScheme(t)
+	role, err := BuildFrontendRole(gw, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(role.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(role.Rules))
+	}
+	r := role.Rules[0]
+	if len(r.Resources) != 1 || r.Resources[0] != "secrets" {
+		t.Errorf("expected only secrets; got %v", r.Resources)
+	}
+	wantVerbs := map[string]bool{"get": true, "list": true, "watch": true}
+	for _, v := range r.Verbs {
+		if !wantVerbs[v] {
+			t.Errorf("unexpected verb %q (only get/list/watch allowed)", v)
+		}
+	}
+	if len(r.Verbs) != 3 {
+		t.Errorf("expected 3 verbs (get/list/watch), got %d: %v", len(r.Verbs), r.Verbs)
+	}
+}
+
+// --- BuildFrontendRoleBinding ---
+
+func TestBuildFrontendRoleBinding(t *testing.T) {
+	gw := sampleGateway()
+	scheme := testScheme(t)
+	rb, err := BuildFrontendRoleBinding(gw, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rb.RoleRef.Name != FrontendName(gw) {
+		t.Errorf("roleRef: %v", rb.RoleRef)
+	}
+	if len(rb.Subjects) != 1 || rb.Subjects[0].Name != FrontendName(gw) || rb.Subjects[0].Kind != "ServiceAccount" {
+		t.Errorf("subjects: %v", rb.Subjects)
+	}
+}
+
+// --- BuildFrontendTorrcConfigMap ---
+
+func TestBuildFrontendTorrcConfigMap(t *testing.T) {
+	gw := sampleGateway()
+	scheme := testScheme(t)
+	cm, err := BuildFrontendTorrcConfigMap(gw, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := cm.Data["torrc"]
+	if rendered == "" {
+		t.Fatal("expected non-empty torrc")
+	}
+	if !strings.Contains(rendered, "ControlPort") {
+		t.Errorf("frontend torrc must enable ControlPort:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "CookieAuthentication 1") {
+		t.Errorf("frontend torrc must enable CookieAuthentication:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "HiddenService") {
+		t.Errorf("frontend torrc must NOT contain any HiddenService directives:\n%s", rendered)
+	}
+}
+
+// --- BuildFrontendDeployment ---
+
+func TestBuildFrontendDeployment(t *testing.T) {
+	gw := sampleGateway()
+	scheme := testScheme(t)
+	pol := &policyv1alpha1.OnionBalancePolicy{
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "blog-master"},
+		},
+	}
+	master := sampleMasterAddr(t)
+	d, err := BuildFrontendDeployment(gw, pol, master, RuntimeImages{
+		Tor:          "tor:v1",
+		Onionbalance: "onionbalance:v1",
+		Obrefresh:    "obrefresh:v1",
+	}, scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *d.Spec.Replicas != 1 {
+		t.Errorf("frontend must be replicas=1; got %d", *d.Spec.Replicas)
+	}
+	containers := map[string]corev1.Container{}
+	for _, c := range d.Spec.Template.Spec.Containers {
+		containers[c.Name] = c
+	}
+	for _, want := range []string{"tor", "onionbalance", "obrefresh"} {
+		if _, ok := containers[want]; !ok {
+			t.Errorf("missing container %q; got containers: %v", want, mapKeys(containers))
+		}
+	}
+	if d.Spec.Template.Spec.ServiceAccountName != FrontendName(gw) {
+		t.Errorf("SA: %s want %s", d.Spec.Template.Spec.ServiceAccountName, FrontendName(gw))
+	}
+	// master Secret must be mounted RO at /etc/onionbalance/keys
+	foundMount := false
+	for _, vm := range containers["onionbalance"].VolumeMounts {
+		if vm.MountPath == "/etc/onionbalance/keys" && vm.ReadOnly {
+			foundMount = true
+		}
+	}
+	if !foundMount {
+		t.Errorf("master Secret must be mounted RO at /etc/onionbalance/keys; got mounts: %v", containers["onionbalance"].VolumeMounts)
+	}
+	// obrefresh must carry --master-address flag
+	foundArg := false
+	for _, a := range containers["obrefresh"].Args {
+		if a == "--master-address="+master.String() {
+			foundArg = true
+		}
+	}
+	if !foundArg {
+		t.Errorf("obrefresh must receive --master-address; got args: %v", containers["obrefresh"].Args)
+	}
+}
+
+func mapKeys[K comparable, V any](m map[K]V) []K {
+	out := make([]K, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}

@@ -38,6 +38,8 @@ type RuntimeImages struct {
 	Mkp224o        string
 	VanityFinalize string
 	Operator       string // currently unused; kept for forward compat (e.g. webhook)
+	Onionbalance   string
+	Obrefresh      string
 }
 
 // EffectiveServicePolicy carries the values from a TorServicePolicy after
