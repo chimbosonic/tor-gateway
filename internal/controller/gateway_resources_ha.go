@@ -457,6 +457,8 @@ ControlPort 9051
 CookieAuthentication 1
 CookieAuthFile /var/lib/tor/control_auth_cookie
 DataDirectory /var/lib/tor
+MetricsPort 0.0.0.0:9035
+MetricsPortPolicy accept 0.0.0.0/0
 Log notice stdout
 `
 

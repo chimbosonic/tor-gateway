@@ -577,6 +577,9 @@ func TestBuildFrontendTorrcConfigMap(t *testing.T) {
 	if strings.Contains(rendered, "HiddenService") {
 		t.Errorf("frontend torrc must NOT contain any HiddenService directives:\n%s", rendered)
 	}
+	if !strings.Contains(rendered, "MetricsPort 0.0.0.0:9035") {
+		t.Errorf("frontend torrc must enable MetricsPort on 9035 (the kubelet probe target):\n%s", rendered)
+	}
 }
 
 // --- BuildFrontendDeployment ---
