@@ -40,10 +40,12 @@ var _ = Describe("Gateway reconciler", func() {
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
 			Images: RuntimeImages{
-				Tor:      "tor:test",
-				Router:   "router:test",
-				TorInit:  "init:test",
-				Operator: "manager:test",
+				Tor:          "tor:test",
+				Router:       "router:test",
+				TorInit:      "init:test",
+				Operator:     "manager:test",
+				Onionbalance: "onionbalance:test",
+				Obrefresh:    "obrefresh:test",
 			},
 		}
 	}
@@ -278,6 +280,182 @@ var _ = Describe("Gateway reconciler", func() {
 			Namespace: gw.Namespace,
 			Name:      gw.Name,
 		}))
+	})
+
+	Describe("Mode A→B transition", func() {
+		const ns = "default"
+
+		makeValidMasterSecret := func(name string) *corev1.Secret {
+			GinkgoHelper()
+			kp, err := tor.GenerateKeyPair(nil)
+			Expect(err).NotTo(HaveOccurred())
+			sec := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+				Data: map[string][]byte{
+					"hs_ed25519_secret_key": kp.SecretKeyFile(),
+					"hs_ed25519_public_key": kp.PublicKeyFile(),
+				},
+			}
+			Expect(k8sClient.Create(ctx, sec)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, sec) })
+			return sec
+		}
+
+		reconcileOBP := func(name string) {
+			GinkgoHelper()
+			r := &OnionBalancePolicyReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: name, Namespace: ns},
+			})
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		It("switches from Mode A to Mode B when an Accepted OBP is attached", func() {
+			gw := makeGateway("ha-ab", ns, "tor-gateway-test")
+
+			// Initial Mode A reconcile.
+			reconcileGW(gw.Name, gw.Namespace)
+
+			// Mode A: Deployment and Service exist.
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: DeploymentName(gw.Name), Namespace: ns}, &appsv1.Deployment{})).To(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: ServiceName(gw.Name), Namespace: ns}, &corev1.Service{})).To(Succeed())
+
+			masterSec := makeValidMasterSecret("ha-ab-master")
+
+			obp := &policyv1alpha1.OnionBalancePolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "ha-ab-obp", Namespace: ns},
+				Spec: policyv1alpha1.OnionBalancePolicySpec{
+					TargetRefs: []gwv1.LocalPolicyTargetReference{{
+						Group: "gateway.networking.k8s.io",
+						Kind:  "Gateway",
+						Name:  gwv1.ObjectName(gw.Name),
+					}},
+					Replicas:           2,
+					MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: masterSec.Name},
+				},
+			}
+			Expect(k8sClient.Create(ctx, obp)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, obp) })
+
+			// Reconcile OBP to set Accepted=True.
+			reconcileOBP(obp.Name)
+
+			// Now reconcile the Gateway — it should switch to Mode B.
+			reconcileGW(gw.Name, gw.Namespace)
+
+			// Mode B resources present.
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: FrontendName(gw), Namespace: ns}, &appsv1.Deployment{})).To(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: BackendStatefulSetName(gw), Namespace: ns}, &appsv1.StatefulSet{})).To(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: BackendHeadlessServiceName(gw), Namespace: ns}, &corev1.Service{})).To(Succeed())
+
+			// Mode A resources gone.
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: DeploymentName(gw.Name), Namespace: ns}, &appsv1.Deployment{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Mode A Deployment should be deleted")
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: ServiceName(gw.Name), Namespace: ns}, &corev1.Service{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Mode A Service should be deleted")
+
+			// Status: addresses contain the master .onion.
+			out := &gwv1.Gateway{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, out)).To(Succeed())
+			Expect(out.Status.Addresses).To(HaveLen(1))
+			Expect(strings.HasSuffix(out.Status.Addresses[0].Value, ".onion")).To(BeTrue())
+			assertGwConditionTrue(out, gwv1.GatewayConditionProgrammed)
+		})
+
+		It("reverts to Mode A when the OBP is removed", func() {
+			gw := makeGateway("ha-ba", ns, "tor-gateway-test")
+			masterSec := makeValidMasterSecret("ha-ba-master")
+
+			obp := &policyv1alpha1.OnionBalancePolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "ha-ba-obp", Namespace: ns},
+				Spec: policyv1alpha1.OnionBalancePolicySpec{
+					TargetRefs: []gwv1.LocalPolicyTargetReference{{
+						Group: "gateway.networking.k8s.io",
+						Kind:  "Gateway",
+						Name:  gwv1.ObjectName(gw.Name),
+					}},
+					Replicas:           2,
+					MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: masterSec.Name},
+				},
+			}
+			Expect(k8sClient.Create(ctx, obp)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, obp) })
+
+			// Reconcile OBP to set Accepted=True, then reconcile GW into Mode B.
+			reconcileOBP(obp.Name)
+			reconcileGW(gw.Name, gw.Namespace)
+
+			// Confirm Mode B is active.
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: FrontendName(gw), Namespace: ns}, &appsv1.Deployment{})).To(Succeed())
+
+			// Delete the OBP and re-reconcile the Gateway.
+			Expect(k8sClient.Delete(ctx, obp)).To(Succeed())
+			reconcileGW(gw.Name, gw.Namespace)
+
+			// Mode B resources gone.
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: FrontendName(gw), Namespace: ns}, &appsv1.Deployment{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Mode B frontend Deployment should be deleted")
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: BackendStatefulSetName(gw), Namespace: ns}, &appsv1.StatefulSet{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Mode B backend StatefulSet should be deleted")
+
+			// Mode A resources present.
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: DeploymentName(gw.Name), Namespace: ns}, &appsv1.Deployment{})).To(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: ServiceName(gw.Name), Namespace: ns}, &corev1.Service{})).To(Succeed())
+
+			// Status: addresses revert to the Gateway-key .onion.
+			out := &gwv1.Gateway{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, out)).To(Succeed())
+			Expect(out.Status.Addresses).To(HaveLen(1))
+			Expect(strings.HasSuffix(out.Status.Addresses[0].Value, ".onion")).To(BeTrue())
+			assertGwConditionTrue(out, gwv1.GatewayConditionProgrammed)
+		})
+
+		It("sets Programmed=False/PolicyNotAccepted when OBP is not Accepted", func() {
+			gw := makeGateway("ha-notaccepted", ns, "tor-gateway-test")
+
+			// OBP with a missing master Secret → Accepted=False/MasterKeyMissing.
+			obp := &policyv1alpha1.OnionBalancePolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "ha-notaccepted-obp", Namespace: ns},
+				Spec: policyv1alpha1.OnionBalancePolicySpec{
+					TargetRefs: []gwv1.LocalPolicyTargetReference{{
+						Group: "gateway.networking.k8s.io",
+						Kind:  "Gateway",
+						Name:  gwv1.ObjectName(gw.Name),
+					}},
+					Replicas:           1,
+					MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "ha-notaccepted-no-such-secret"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, obp)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, obp) })
+
+			// Reconcile OBP — master Secret missing → Accepted=False.
+			reconcileOBP(obp.Name)
+
+			// Reconcile Gateway — should refuse to provision anything.
+			reconcileGW(gw.Name, gw.Namespace)
+
+			// Neither Mode A nor Mode B Deployment should exist.
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: DeploymentName(gw.Name), Namespace: ns}, &appsv1.Deployment{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Mode A Deployment should not exist")
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: FrontendName(gw), Namespace: ns}, &appsv1.Deployment{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Mode B frontend Deployment should not exist")
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: BackendStatefulSetName(gw), Namespace: ns}, &appsv1.StatefulSet{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Mode B backend StatefulSet should not exist")
+
+			// Gateway.status: Programmed=False with reason PolicyNotAccepted.
+			out := &gwv1.Gateway{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, out)).To(Succeed())
+			var programmedCond *metav1.Condition
+			for i := range out.Status.Conditions {
+				if out.Status.Conditions[i].Type == string(gwv1.GatewayConditionProgrammed) {
+					programmedCond = &out.Status.Conditions[i]
+				}
+			}
+			Expect(programmedCond).NotTo(BeNil(), "Programmed condition should be set")
+			Expect(programmedCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(programmedCond.Reason).To(Equal("PolicyNotAccepted"))
+		})
 	})
 })
 

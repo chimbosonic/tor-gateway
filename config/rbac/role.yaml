@@ -92,20 +92,14 @@ rules:
   - policy.torgateway.io
   resources:
   - onionbalancepolicies
+  - torclientauthpolicies
+  - torservicepolicies
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch
   - update
   - watch
-- apiGroups:
-  - policy.torgateway.io
-  resources:
-  - onionbalancepolicies/finalizers
-  verbs:
-  - update
 - apiGroups:
   - policy.torgateway.io
   resources:
@@ -116,17 +110,6 @@ rules:
   - get
   - patch
   - update
-- apiGroups:
-  - policy.torgateway.io
-  resources:
-  - torclientauthpolicies
-  - torservicepolicies
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:

@@ -90,6 +90,40 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	obp, obpAccepted, err := r.findEffectiveOnionBalance(ctx, gw)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if obp != nil && !obpAccepted {
+		// OBP attached but not Accepted — refuse to fall back to Mode A.
+		if err := r.setProgrammingCondition(ctx, gw,
+			"PolicyNotAccepted",
+			"OnionBalancePolicy "+obp.Name+" is not Accepted; refusing to fall back to Mode A while HA is intended"); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if obp != nil && obpAccepted {
+		if err := r.cleanupModeAResources(ctx, gw); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.ensureModeB(ctx, gw, obp); err != nil {
+			return ctrl.Result{}, fmt.Errorf("ensure mode B: %w", err)
+		}
+		return ctrl.Result{}, nil
+	}
+	// Mode A path: no OBP targeting this Gateway. Tear down any leftover
+	// Mode B resources so a detached OBP is fully cleaned up.
+	if err := r.cleanupModeBResources(ctx, gw); err != nil {
+		return ctrl.Result{}, err
+	}
+	return r.reconcileModeA(ctx, logger, gw)
+}
+
+func (r *GatewayReconciler) reconcileModeA(ctx context.Context, logger interface {
+	Info(string, ...any)
+	Error(error, string, ...any)
+}, gw *gwv1.Gateway) (ctrl.Result, error) {
 	policy, err := r.findEffectivePolicy(ctx, gw)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -271,6 +305,35 @@ func (r *GatewayReconciler) findEffectiveClientAuth(
 		Enabled:    true,
 		SecretName: matched.Spec.ClientsSecretRef.Name,
 	}, nil
+}
+
+// findEffectiveOnionBalance returns the OBP attached to gw (if any) and
+// whether it is Accepted by this controller. Returns (nil, false, nil) if
+// no OBP targets the Gateway.
+func (r *GatewayReconciler) findEffectiveOnionBalance(ctx context.Context, gw *gwv1.Gateway) (*policyv1alpha1.OnionBalancePolicy, bool, error) {
+	var obps policyv1alpha1.OnionBalancePolicyList
+	if err := r.List(ctx, &obps, client.InNamespace(gw.Namespace)); err != nil {
+		return nil, false, fmt.Errorf("list OBPs: %w", err)
+	}
+	for i := range obps.Items {
+		p := &obps.Items[i]
+		if !policyTargets(p.Spec.TargetRefs, gw.Name) {
+			continue
+		}
+		accepted := false
+		for _, anc := range p.Status.Ancestors {
+			if string(anc.ControllerName) != string(ControllerName) {
+				continue
+			}
+			for _, c := range anc.Conditions {
+				if c.Type == string(gwv1.PolicyConditionAccepted) && c.Status == metav1.ConditionTrue {
+					accepted = true
+				}
+			}
+		}
+		return p, accepted, nil
+	}
+	return nil, false, nil
 }
 
 func (r *GatewayReconciler) ensureKeySecret(
@@ -500,6 +563,320 @@ func (r *GatewayReconciler) ensureNetworkPolicy(
 	return err
 }
 
+// ensureModeB provisions all Mode B (onionbalance HA) resources for gw.
+func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, pol *policyv1alpha1.OnionBalancePolicy) error {
+	masterSecretNS := pol.Spec.MasterKeySecretRef.Namespace
+	if masterSecretNS == "" {
+		masterSecretNS = pol.Namespace
+	}
+	var masterSec corev1.Secret
+	if err := r.Get(ctx, client.ObjectKey{Namespace: masterSecretNS, Name: pol.Spec.MasterKeySecretRef.Name}, &masterSec); err != nil {
+		return fmt.Errorf("get master Secret: %w", err)
+	}
+	master, err := tor.MasterOnionFromSecret(masterSec.Data)
+	if err != nil {
+		return fmt.Errorf("derive master .onion: %w", err)
+	}
+
+	for i := int32(0); i < pol.Spec.Replicas; i++ {
+		want, err := BuildBackendKeySecret(gw, int(i), nil, r.Scheme)
+		if err != nil {
+			return err
+		}
+		if err := r.ensureBackendKeySecret(ctx, want); err != nil {
+			return fmt.Errorf("backend Secret %d: %w", i, err)
+		}
+	}
+
+	svc, err := BuildBackendHeadlessService(gw, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHAService(ctx, svc); err != nil {
+		return fmt.Errorf("backend headless Service: %w", err)
+	}
+
+	cm, err := BuildOnionbalanceConfigMap(gw, master, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHAConfigMap(ctx, cm); err != nil {
+		return fmt.Errorf("onionbalance ConfigMap: %w", err)
+	}
+
+	sa, err := BuildFrontendServiceAccount(gw, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHAServiceAccount(ctx, sa); err != nil {
+		return fmt.Errorf("frontend ServiceAccount: %w", err)
+	}
+
+	role, err := BuildFrontendRole(gw, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHARole(ctx, role); err != nil {
+		return fmt.Errorf("frontend Role: %w", err)
+	}
+
+	rb, err := BuildFrontendRoleBinding(gw, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHARoleBinding(ctx, rb); err != nil {
+		return fmt.Errorf("frontend RoleBinding: %w", err)
+	}
+
+	frontendTorrc, err := BuildFrontendTorrcConfigMap(gw, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHAConfigMap(ctx, frontendTorrc); err != nil {
+		return fmt.Errorf("frontend torrc ConfigMap: %w", err)
+	}
+
+	ss, err := BuildBackendStatefulSet(gw, pol, master, r.Images, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHAStatefulSet(ctx, ss); err != nil {
+		return fmt.Errorf("backend StatefulSet: %w", err)
+	}
+
+	d, err := BuildFrontendDeployment(gw, pol, master, r.Images, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHADeployment(ctx, d); err != nil {
+		return fmt.Errorf("frontend Deployment: %w", err)
+	}
+
+	return r.updateStatusModeB(ctx, gw, master, pol)
+}
+
+func (r *GatewayReconciler) ensureBackendKeySecret(ctx context.Context, want *corev1.Secret) error {
+	current := &corev1.Secret{}
+	current.Name = want.Name
+	current.Namespace = want.Namespace
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, current, func() error {
+		// Only write keys on creation; preserve existing key material on updates.
+		if current.ResourceVersion == "" {
+			current.Data = want.Data
+		}
+		current.Labels = want.Labels
+		current.OwnerReferences = want.OwnerReferences
+		return nil
+	})
+	return err
+}
+
+func (r *GatewayReconciler) ensureHAService(ctx context.Context, want *corev1.Service) error {
+	current := &corev1.Service{}
+	current.Name = want.Name
+	current.Namespace = want.Namespace
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, current, func() error {
+		current.Labels = want.Labels
+		if current.Spec.ClusterIP == "" {
+			current.Spec.ClusterIP = want.Spec.ClusterIP
+		}
+		current.Spec.Selector = want.Spec.Selector
+		current.Spec.Ports = want.Spec.Ports
+		current.OwnerReferences = want.OwnerReferences
+		return nil
+	})
+	return err
+}
+
+func (r *GatewayReconciler) ensureHAConfigMap(ctx context.Context, want *corev1.ConfigMap) error {
+	current := &corev1.ConfigMap{}
+	current.Name = want.Name
+	current.Namespace = want.Namespace
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, current, func() error {
+		current.Labels = want.Labels
+		current.Data = want.Data
+		current.OwnerReferences = want.OwnerReferences
+		return nil
+	})
+	return err
+}
+
+func (r *GatewayReconciler) ensureHAServiceAccount(ctx context.Context, want *corev1.ServiceAccount) error {
+	current := &corev1.ServiceAccount{}
+	current.Name = want.Name
+	current.Namespace = want.Namespace
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, current, func() error {
+		current.Labels = want.Labels
+		current.OwnerReferences = want.OwnerReferences
+		return nil
+	})
+	return err
+}
+
+func (r *GatewayReconciler) ensureHARole(ctx context.Context, want *rbacv1.Role) error {
+	current := &rbacv1.Role{}
+	current.Name = want.Name
+	current.Namespace = want.Namespace
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, current, func() error {
+		current.Labels = want.Labels
+		current.Rules = want.Rules
+		current.OwnerReferences = want.OwnerReferences
+		return nil
+	})
+	return err
+}
+
+func (r *GatewayReconciler) ensureHARoleBinding(ctx context.Context, want *rbacv1.RoleBinding) error {
+	current := &rbacv1.RoleBinding{}
+	current.Name = want.Name
+	current.Namespace = want.Namespace
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, current, func() error {
+		current.Labels = want.Labels
+		current.RoleRef = want.RoleRef
+		current.Subjects = want.Subjects
+		current.OwnerReferences = want.OwnerReferences
+		return nil
+	})
+	return err
+}
+
+func (r *GatewayReconciler) ensureHAStatefulSet(ctx context.Context, want *appsv1.StatefulSet) error {
+	current := &appsv1.StatefulSet{}
+	current.Name = want.Name
+	current.Namespace = want.Namespace
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, current, func() error {
+		current.Labels = want.Labels
+		current.Spec = want.Spec
+		current.OwnerReferences = want.OwnerReferences
+		return nil
+	})
+	return err
+}
+
+func (r *GatewayReconciler) ensureHADeployment(ctx context.Context, want *appsv1.Deployment) error {
+	current := &appsv1.Deployment{}
+	current.Name = want.Name
+	current.Namespace = want.Namespace
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, current, func() error {
+		current.Labels = want.Labels
+		current.Spec = want.Spec
+		current.OwnerReferences = want.OwnerReferences
+		return nil
+	})
+	return err
+}
+
+func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gateway, master tor.OnionAddress, pol *policyv1alpha1.OnionBalancePolicy) error {
+	addrType := gwv1.HostnameAddressType
+	prev := previousOnion(gw)
+	gw.Status.Addresses = []gwv1.GatewayStatusAddress{{Type: &addrType, Value: master.String()}}
+	if prev != "" && prev != master.String() {
+		r.event(gw, corev1.EventTypeNormal, "MasterDescriptorChanged",
+			"switched to onionbalance HA — published .onion is now "+master.String())
+	}
+
+	const annLastReplicas = "torgateway.io/last-known-replicas"
+	prevReplicas, _ := strconv.Atoi(gw.Annotations[annLastReplicas])
+	if int32(prevReplicas) != pol.Spec.Replicas {
+		r.event(gw, corev1.EventTypeNormal, "BackendsRolling",
+			fmt.Sprintf("backend replicas changing %d→%d; up to ~15 min until clients see the new pool", prevReplicas, pol.Spec.Replicas))
+		if gw.Annotations == nil {
+			gw.Annotations = map[string]string{}
+		}
+		gw.Annotations[annLastReplicas] = strconv.Itoa(int(pol.Spec.Replicas))
+	}
+
+	const annPowEmitted = "torgateway.io/pow-override-emitted"
+	if powForcedOff(ctx, r.Client, gw) && gw.Annotations[annPowEmitted] != "true" {
+		r.event(gw, corev1.EventTypeNormal, "PoWForcedOffInHA",
+			"HiddenServicePoWDefensesEnabled in TorServicePolicy is overridden to false on backends (onionbalance#13)")
+		if gw.Annotations == nil {
+			gw.Annotations = map[string]string{}
+		}
+		gw.Annotations[annPowEmitted] = "true"
+	}
+
+	wantConds := []metav1.Condition{
+		{
+			Type:               string(gwv1.GatewayConditionAccepted),
+			Status:             metav1.ConditionTrue,
+			Reason:             string(gwv1.GatewayReasonAccepted),
+			Message:            "Gateway accepted by tor-gateway",
+			ObservedGeneration: gw.Generation,
+			LastTransitionTime: metav1.Now(),
+		},
+		{
+			Type:               string(gwv1.GatewayConditionProgrammed),
+			Status:             metav1.ConditionTrue,
+			Reason:             string(gwv1.GatewayReasonProgrammed),
+			Message:            "Mode B (onionbalance HA) provisioned; master .onion published",
+			ObservedGeneration: gw.Generation,
+			LastTransitionTime: metav1.Now(),
+		},
+	}
+	for _, c := range wantConds {
+		setCondition(&gw.Status.Conditions, c)
+	}
+
+	if err := r.Update(ctx, gw); err != nil {
+		return err
+	}
+	return r.Status().Update(ctx, gw)
+}
+
+func previousOnion(gw *gwv1.Gateway) string {
+	if len(gw.Status.Addresses) == 0 {
+		return ""
+	}
+	return gw.Status.Addresses[0].Value
+}
+
+func (r *GatewayReconciler) cleanupModeAResources(ctx context.Context, gw *gwv1.Gateway) error {
+	for _, obj := range []client.Object{
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: DeploymentName(gw.Name)}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: ServiceName(gw.Name)}},
+	} {
+		if err := client.IgnoreNotFound(r.Delete(ctx, obj)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *GatewayReconciler) cleanupModeBResources(ctx context.Context, gw *gwv1.Gateway) error {
+	for _, obj := range []client.Object{
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: FrontendName(gw)}},
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: BackendStatefulSetName(gw)}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: BackendHeadlessServiceName(gw)}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: OnionbalanceConfigMapName(gw)}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: FrontendTorrcConfigMapName(gw)}},
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: FrontendName(gw)}},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: FrontendName(gw)}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: FrontendName(gw)}},
+	} {
+		if err := client.IgnoreNotFound(r.Delete(ctx, obj)); err != nil {
+			return err
+		}
+	}
+	var secrets corev1.SecretList
+	if err := r.List(ctx, &secrets,
+		client.InNamespace(gw.Namespace),
+		client.MatchingLabels{"torgateway.io/gateway": gw.Name, "torgateway.io/role": "backend"},
+	); err != nil {
+		return err
+	}
+	for i := range secrets.Items {
+		if err := client.IgnoreNotFound(r.Delete(ctx, &secrets.Items[i])); err != nil {
+			return err
+		}
+	}
+	if gw.Annotations != nil {
+		delete(gw.Annotations, "torgateway.io/pow-override-emitted")
+		_ = r.Update(ctx, gw)
+	}
+	return nil
+}
+
 // routeTargetsGateway reports whether route's parentRefs designate gw.
 func routeTargetsGateway(route *gwv1.HTTPRoute, gw *gwv1.Gateway) bool {
 	for _, p := range route.Spec.ParentRefs {
@@ -604,6 +981,7 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&gwv1.Gateway{}).
 		Owns(&appsv1.Deployment{}).
+		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
