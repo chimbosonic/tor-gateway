@@ -9,9 +9,10 @@ You may obtain a copy of the License at
 */
 
 // Command obrefresh is the sidecar that runs alongside the onionbalance
-// frontend daemon. It watches the headless Service for backend Tor instances
-// belonging to a Gateway, rewrites the onionbalance config.yaml on change,
-// and SIGHUPs the onionbalance process.
+// frontend daemon. It watches backend Secrets labelled
+// torgateway.io/gateway=<gw>,torgateway.io/role=backend in the Gateway's
+// namespace, rewrites the onionbalance config.yaml on change, and SIGHUPs
+// the onionbalance process.
 //
 // Splitting this out of the operator keeps the operator's blast radius small
 // (it never needs cluster-wide pod read) and keeps the onionbalance pod
@@ -24,19 +25,25 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/chimbosonic/tor-gateway/internal/onionbalance"
+	"github.com/chimbosonic/tor-gateway/internal/tor"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 func main() {
 	var (
-		gatewayName string
-		gatewayNS   string
-		configPath  string
-		pidPath     string
-		interval    time.Duration
+		gatewayName   string
+		gatewayNS     string
+		configPath    string
+		pidPath       string
+		interval      time.Duration
+		masterAddr    string
+		masterKeyPath string
 	)
 	flag.StringVar(&gatewayName, "gateway", "", "name of the Gateway this refresher serves")
 	flag.StringVar(&gatewayNS, "namespace", "", "namespace of the Gateway this refresher serves")
@@ -46,6 +53,10 @@ func main() {
 		"pidfile of the onionbalance daemon to SIGHUP")
 	flag.DurationVar(&interval, "interval", 30*time.Second,
 		"minimum interval between rewrites")
+	flag.StringVar(&masterAddr, "master-address", "",
+		"the master .onion address (with or without the .onion suffix)")
+	flag.StringVar(&masterKeyPath, "master-key-path", "/etc/onionbalance/keys/hs_ed25519_secret_key",
+		"in-pod path where the master ed25519 secret key is mounted")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -55,16 +66,44 @@ func main() {
 		slog.Error("--gateway and --namespace are required")
 		os.Exit(2)
 	}
+	if masterAddr == "" {
+		slog.Error("--master-address is required")
+		os.Exit(2)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	restCfg, err := rest.InClusterConfig()
+	if err != nil {
+		slog.Error("rest.InClusterConfig", "err", err)
+		os.Exit(1)
+	}
+	client, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		slog.Error("kubernetes.NewForConfig", "err", err)
+		os.Exit(1)
+	}
+
+	// Normalise: ensure the .onion suffix is present before parsing.
+	if !strings.HasSuffix(masterAddr, ".onion") {
+		masterAddr += ".onion"
+	}
+	master, err := tor.ParseAddress(masterAddr)
+	if err != nil {
+		slog.Error("parse master-address", "value", masterAddr, "err", err)
+		os.Exit(2)
+	}
+
 	r, err := onionbalance.NewRefresher(ctx, onionbalance.RefresherConfig{
 		GatewayName:      gatewayName,
 		GatewayNamespace: gatewayNS,
+		MasterKeyPath:    masterKeyPath,
 		ConfigPath:       configPath,
 		PIDFile:          pidPath,
 		Interval:         interval,
+		Master:           master,
+		Client:           client,
 	})
 	if err != nil {
 		slog.Error("refresher init failed", "err", err)
