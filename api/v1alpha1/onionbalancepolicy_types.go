@@ -56,11 +56,12 @@ type OnionBalancePolicySpec struct {
 	TargetRefs []gwv1.LocalPolicyTargetReference `json:"targetRefs"`
 
 	// Replicas is the number of backend Tor instances that publish
-	// introduction points behind the master onion address. Bounded by the
-	// onionbalance descriptor size limit (12 backends in v3).
+	// introduction points behind the master onion address. Capped at 8
+	// to match the onionbalance-config generator default; the Tor spec
+	// ceiling at the current N_INTROS_PER_INSTANCE=2 is 10 backends.
 	//
 	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=12
+	// +kubebuilder:validation:Maximum=8
 	// +kubebuilder:default=3
 	// +required
 	Replicas int32 `json:"replicas"`
@@ -74,7 +75,9 @@ type OnionBalancePolicySpec struct {
 
 	// MasterKeySecretRef references the Secret holding the master ed25519
 	// key for the frontend onionbalance daemon. Required. The Secret MUST
-	// contain `hs_ed25519_secret_key` and `hs_ed25519_public_key` keys.
+	// contain `hs_ed25519_secret_key` (64 bytes) and `hs_ed25519_public_key`
+	// (32 bytes) in the standard Tor binary format — the same shape as a
+	// HiddenServiceDir's key files, NOT the onionbalance PEM format.
 	//
 	// +required
 	MasterKeySecretRef MasterKeySecretRef `json:"masterKeySecretRef"`

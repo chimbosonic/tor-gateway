@@ -189,7 +189,9 @@ spec:
                 description: |-
                   MasterKeySecretRef references the Secret holding the master ed25519
                   key for the frontend onionbalance daemon. Required. The Secret MUST
-                  contain `hs_ed25519_secret_key` and `hs_ed25519_public_key` keys.
+                  contain `hs_ed25519_secret_key` (64 bytes) and `hs_ed25519_public_key`
+                  (32 bytes) in the standard Tor binary format — the same shape as a
+                  HiddenServiceDir's key files, NOT the onionbalance PEM format.
                 properties:
                   name:
                     description: Name of the Secret.
@@ -214,10 +216,11 @@ spec:
                 default: 3
                 description: |-
                   Replicas is the number of backend Tor instances that publish
-                  introduction points behind the master onion address. Bounded by the
-                  onionbalance descriptor size limit (12 backends in v3).
+                  introduction points behind the master onion address. Capped at 8
+                  to match the onionbalance-config generator default; the Tor spec
+                  ceiling at the current N_INTROS_PER_INSTANCE=2 is 10 backends.
                 format: int32
-                maximum: 12
+                maximum: 8
                 minimum: 1
                 type: integer
               targetRefs:
