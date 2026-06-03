@@ -1,9 +1,19 @@
+# A working example of HA via onionbalance. Prerequisites:
+# - A Secret named blog-master-key in the same namespace, containing
+#   `hs_ed25519_secret_key` (64 bytes) and `hs_ed25519_public_key`
+#   (32 bytes) — the standard Tor binary format. Bootstrap via
+#   `mkp224o` (vanity) or by copying from a prior HiddenServiceDir.
+# - A Gateway named "blog" of class tor-gateway in the same namespace.
 apiVersion: policy.torgateway.io/v1alpha1
 kind: OnionBalancePolicy
 metadata:
-  labels:
-    app.kubernetes.io/name: tor-gateway
-    app.kubernetes.io/managed-by: kustomize
-  name: onionbalancepolicy-sample
+  name: blog-ha
 spec:
-  # TODO(user): Add fields here
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: blog
+  replicas: 3
+  refreshInterval: 30s
+  masterKeySecretRef:
+    name: blog-master-key
