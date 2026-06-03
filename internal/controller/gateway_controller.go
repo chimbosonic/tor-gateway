@@ -614,6 +614,7 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&netv1.NetworkPolicy{}).
 		Watches(&policyv1alpha1.TorServicePolicy{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForServicePolicy)).
 		Watches(&policyv1alpha1.TorClientAuthPolicy{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForClientAuthPolicy)).
+		Watches(&policyv1alpha1.OnionBalancePolicy{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForOnionBalancePolicy)).
 		Watches(&gwv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.gatewaysForHTTPRoute)).
 		Named("gateway").
 		Complete(r)
@@ -658,6 +659,16 @@ func (r *GatewayReconciler) gatewaysForServicePolicy(_ context.Context, obj clie
 // requests for every Gateway it targets in the same namespace.
 func (r *GatewayReconciler) gatewaysForClientAuthPolicy(_ context.Context, obj client.Object) []reconcile.Request {
 	p, ok := obj.(*policyv1alpha1.TorClientAuthPolicy)
+	if !ok {
+		return nil
+	}
+	return requestsForTargets(p.Namespace, p.Spec.TargetRefs)
+}
+
+// gatewaysForOnionBalancePolicy maps an OnionBalancePolicy to reconcile
+// requests for every Gateway it targets in the same namespace.
+func (r *GatewayReconciler) gatewaysForOnionBalancePolicy(_ context.Context, obj client.Object) []reconcile.Request {
+	p, ok := obj.(*policyv1alpha1.OnionBalancePolicy)
 	if !ok {
 		return nil
 	}

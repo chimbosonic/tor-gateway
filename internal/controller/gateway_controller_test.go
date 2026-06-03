@@ -251,6 +251,34 @@ var _ = Describe("Gateway reconciler", func() {
 				"Audit mode must not add the client-auth volume")
 		}
 	})
+
+	It("re-enqueues Gateway reconciliation when an OnionBalancePolicy targeting it is created", func() {
+		gw := makeGateway("obp-watch", "default", "tor-gateway-test")
+		reconcileGW(gw.Name, gw.Namespace)
+
+		r := makeReconciler()
+		obp := &policyv1alpha1.OnionBalancePolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "obp-watch-policy", Namespace: "default"},
+			Spec: policyv1alpha1.OnionBalancePolicySpec{
+				TargetRefs: []gwv1.LocalPolicyTargetReference{{
+					Group: "gateway.networking.k8s.io",
+					Kind:  "Gateway",
+					Name:  gwv1.ObjectName(gw.Name),
+				}},
+				Replicas:           1,
+				MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "obp-watch-master"},
+			},
+		}
+		Expect(k8sClient.Create(ctx, obp)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, obp) })
+
+		reqs := r.gatewaysForOnionBalancePolicy(ctx, obp)
+		Expect(reqs).To(HaveLen(1))
+		Expect(reqs[0].NamespacedName).To(Equal(types.NamespacedName{
+			Namespace: gw.Namespace,
+			Name:      gw.Name,
+		}))
+	})
 })
 
 // assertGwConditionTrue asserts the Gateway has the given condition with
