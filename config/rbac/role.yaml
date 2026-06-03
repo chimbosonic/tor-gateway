@@ -13,6 +13,7 @@ rules:
   - services
   verbs:
   - create
+  - delete
   - get
   - list
   - patch
@@ -29,16 +30,6 @@ rules:
   - apps
   resources:
   - deployments
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - apps
-  resources:
   - statefulsets
   verbs:
   - create
@@ -129,6 +120,7 @@ rules:
   - roles
   verbs:
   - create
+  - delete
   - get
   - list
   - patch
