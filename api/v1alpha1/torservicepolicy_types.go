@@ -26,25 +26,6 @@ import (
 // +kubebuilder:validation:Enum=debug;info;notice;warn;err
 type TorLogLevel string
 
-// KeyRotationSpec controls automatic rotation of a Gateway's hidden-service
-// ed25519 key. Rotation generates a new .onion address (the address IS the
-// key); it is therefore opt-in and disabled by default.
-type KeyRotationSpec struct {
-	// Schedule (cron format, UTC) at which the key is rotated. When unset,
-	// rotation is disabled even if this struct is present.
-	// +optional
-	Schedule string `json:"schedule,omitempty"`
-
-	// RetainPreviousKeys controls how many previous keys the operator keeps
-	// in the Secret after rotation (so external systems can still resolve
-	// stale .onion addresses for a grace period). Defaults to 0.
-	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:validation:Maximum=10
-	// +kubebuilder:default=0
-	// +optional
-	RetainPreviousKeys int32 `json:"retainPreviousKeys,omitempty"`
-}
-
 // TorServicePolicySpec is the configuration for a Tor hidden service attached
 // to a Gateway. This is a Direct Policy (GEP-2648): it applies only to the
 // Gateway(s) referenced in TargetRefs and is not inherited by HTTPRoutes.
@@ -97,13 +78,6 @@ type TorServicePolicySpec struct {
 	//
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
-
-	// KeyRotation configures automatic ed25519 key rotation. Enabling
-	// rotation will change the published .onion address; clients with
-	// bookmarks will need to update.
-	//
-	// +optional
-	KeyRotation *KeyRotationSpec `json:"keyRotation,omitempty"`
 }
 
 // TorServicePolicyStatus reflects the operator's view of policy acceptance,
