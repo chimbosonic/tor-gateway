@@ -59,3 +59,14 @@ func ValidateMasterKeySecret(data map[string][]byte) (*KeyPair, error) {
 
 	return kp, nil
 }
+
+// MasterOnionFromSecret derives the master .onion address from a master
+// key Secret's data map. Convenience wrapper around ValidateMasterKeySecret
+// for callers that don't need the full KeyPair.
+func MasterOnionFromSecret(data map[string][]byte) (OnionAddress, error) {
+	kp, err := ValidateMasterKeySecret(data)
+	if err != nil {
+		return OnionAddress{}, err
+	}
+	return kp.OnionAddress(), nil
+}

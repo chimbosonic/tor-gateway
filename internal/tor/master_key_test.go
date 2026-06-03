@@ -69,3 +69,25 @@ func TestValidateMasterKeySecret(t *testing.T) {
 		}
 	})
 }
+
+func TestMasterOnionFromSecret(t *testing.T) {
+	good, _ := GenerateKeyPair(nil)
+	t.Run("happy", func(t *testing.T) {
+		addr, err := MasterOnionFromSecret(map[string][]byte{
+			"hs_ed25519_secret_key": good.SecretKeyFile(),
+			"hs_ed25519_public_key": good.PublicKeyFile(),
+		})
+		if err != nil {
+			t.Fatalf("MasterOnionFromSecret: %v", err)
+		}
+		if addr.String() != good.OnionAddress().String() {
+			t.Fatalf(".onion mismatch: %s vs %s", addr, good.OnionAddress())
+		}
+	})
+	t.Run("propagates validation error", func(t *testing.T) {
+		_, err := MasterOnionFromSecret(map[string][]byte{})
+		if err == nil {
+			t.Fatal("expected error on empty data, got nil")
+		}
+	})
+}
