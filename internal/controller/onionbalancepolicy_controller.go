@@ -134,7 +134,7 @@ func (r *OnionBalancePolicyReconciler) buildAncestors(
 			if err != nil {
 				log.FromContext(ctx).Error(err, "count ready backends", "gateway", gw.Name)
 			}
-			readyBackends = ready
+			readyBackends += ready
 		}
 
 		ancestor.Conditions = []metav1.Condition{accepted}

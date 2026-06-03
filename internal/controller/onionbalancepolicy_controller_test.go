@@ -200,6 +200,45 @@ var _ = Describe("OnionBalancePolicy status", func() {
 		got := reconcileOBP(pol.Name, pol.Namespace)
 		assertOBPAccepted(got, metav1.ConditionFalse, ReasonOBPMasterKeyInvalid)
 	})
+
+	It("multi-target: both ancestors Accepted=True and readyBackends is sum (0+0) not silently dropped", func() {
+		makeGateway("obp-multi-gw1")
+		makeGateway("obp-multi-gw2")
+		makeValidSecret("obp-multi-secret")
+
+		pol := &policyv1alpha1.OnionBalancePolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "obp-multi", Namespace: "default"},
+			Spec: policyv1alpha1.OnionBalancePolicySpec{
+				TargetRefs: []gwv1.LocalPolicyTargetReference{
+					{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "obp-multi-gw1"},
+					{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "obp-multi-gw2"},
+				},
+				Replicas:           3,
+				MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "obp-multi-secret"},
+			},
+		}
+		Expect(k8sClient.Create(ctx, pol)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, pol) })
+
+		got := reconcileOBP(pol.Name, pol.Namespace)
+
+		Expect(got.Status.Ancestors).To(HaveLen(2))
+		for _, anc := range got.Status.Ancestors {
+			var found bool
+			for _, c := range anc.Conditions {
+				if c.Type == string(gwv1.PolicyConditionAccepted) {
+					Expect(c.Status).To(Equal(metav1.ConditionTrue), "ancestor %s should be Accepted", anc.AncestorRef.Name)
+					Expect(c.Reason).To(Equal(ReasonOBPAccepted))
+					found = true
+					break
+				}
+			}
+			Expect(found).To(BeTrue(), "ancestor %s missing Accepted condition", anc.AncestorRef.Name)
+		}
+		// countReadyBackends is a stub returning 0; the accumulation fix
+		// ensures 0+0=0, not a silent drop of one iteration.
+		Expect(got.Status.ReadyBackends).To(Equal(int32(0)))
+	})
 })
 
 func assertOBPAccepted(pol *policyv1alpha1.OnionBalancePolicy, status metav1.ConditionStatus, reason string) {
