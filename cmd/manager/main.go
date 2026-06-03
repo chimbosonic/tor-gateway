@@ -106,6 +106,12 @@ func main() {
 	flag.DurationVar(&vanityDeadline, "vanity-active-deadline", time.Hour,
 		"max wall-clock a vanity harvest Job runs before failing (the difficulty guard)")
 
+	var onionbalanceImage, obrefreshImage string
+	flag.StringVar(&onionbalanceImage, "onionbalance-image", "",
+		"container image for the onionbalance daemon (frontend pod)")
+	flag.StringVar(&obrefreshImage, "obrefresh-image", "",
+		"container image for the obrefresh sidecar (frontend pod)")
+
 	var torPodNetworkPolicyEnabled bool
 	var clusterPodCIDRsRaw string
 	flag.BoolVar(&torPodNetworkPolicyEnabled, "tor-pod-network-policy-enabled", true,
@@ -241,6 +247,8 @@ func main() {
 			TorInit:        initImage,
 			Mkp224o:        mkp224oImage,
 			VanityFinalize: vanityFinalizeImage,
+			Onionbalance:   onionbalanceImage,
+			Obrefresh:      obrefreshImage,
 		},
 		//nolint:staticcheck // record.EventRecorder API is used throughout the controller and its tests
 		Recorder:                   mgr.GetEventRecorderFor("gateway"),
