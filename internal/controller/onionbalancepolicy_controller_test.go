@@ -18,8 +18,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
 	"github.com/chimbosonic/tor-gateway/internal/tor"
@@ -199,6 +201,180 @@ var _ = Describe("OnionBalancePolicy status", func() {
 		pol := makeOBP("obp-garbage", "obp-garbage-gw", "obp-garbage-secret")
 		got := reconcileOBP(pol.Name, pol.Namespace)
 		assertOBPAccepted(got, metav1.ConditionFalse, ReasonOBPMasterKeyInvalid)
+	})
+
+	It("readyBackends counts only backend Secrets with non-empty hostname", func() {
+		gw := makeGateway("obp-rb-gw")
+		makeValidSecret("obp-rb-master")
+
+		backendReady := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "obp-rb-backend-ready",
+				Namespace: "default",
+				Labels: map[string]string{
+					gatewayLabelKey:      gw.Name,
+					"torgateway.io/role": "backend",
+				},
+			},
+			Data: map[string][]byte{"hostname": []byte("abc123.onion")},
+		}
+		Expect(k8sClient.Create(ctx, backendReady)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, backendReady) })
+
+		backendNotReady := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "obp-rb-backend-notready",
+				Namespace: "default",
+				Labels: map[string]string{
+					gatewayLabelKey:      gw.Name,
+					"torgateway.io/role": "backend",
+				},
+			},
+			Data: map[string][]byte{"hostname": []byte("")},
+		}
+		Expect(k8sClient.Create(ctx, backendNotReady)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, backendNotReady) })
+
+		pol := makeOBP("obp-rb", gw.Name, "obp-rb-master")
+		got := reconcileOBP(pol.Name, pol.Namespace)
+		assertOBPAccepted(got, metav1.ConditionTrue, ReasonOBPAccepted)
+		Expect(got.Status.ReadyBackends).To(Equal(int32(1)))
+	})
+
+	It("cross-namespace master key: Accepted=True when ReferenceGrant allows it", func() {
+		// Create a second namespace for the master secret.
+		otherNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "obp-xns-target"}}
+		if err := k8sClient.Create(ctx, otherNS); err != nil {
+			Expect(client_IgnoreAlreadyExists(err)).NotTo(HaveOccurred())
+		}
+
+		makeGateway("obp-xns-gw")
+
+		kp, err := tor.GenerateKeyPair(nil)
+		Expect(err).NotTo(HaveOccurred())
+		crossSec := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "obp-xns-master", Namespace: "obp-xns-target"},
+			Data: map[string][]byte{
+				"hs_ed25519_secret_key": kp.SecretKeyFile(),
+				"hs_ed25519_public_key": kp.PublicKeyFile(),
+			},
+		}
+		Expect(k8sClient.Create(ctx, crossSec)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, crossSec) })
+
+		grant := &gwv1beta1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "obp-xns-grant", Namespace: "obp-xns-target"},
+			Spec: gwv1beta1.ReferenceGrantSpec{
+				From: []gwv1beta1.ReferenceGrantFrom{{
+					Group:     "policy.torgateway.io",
+					Kind:      "OnionBalancePolicy",
+					Namespace: gwv1.Namespace("default"),
+				}},
+				To: []gwv1beta1.ReferenceGrantTo{{
+					Group: "",
+					Kind:  "Secret",
+					Name:  ptr.To(gwv1.ObjectName("obp-xns-master")),
+				}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, grant)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, grant) })
+
+		pol := &policyv1alpha1.OnionBalancePolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "obp-xns", Namespace: "default"},
+			Spec: policyv1alpha1.OnionBalancePolicySpec{
+				TargetRefs: []gwv1.LocalPolicyTargetReference{{
+					Group: "gateway.networking.k8s.io",
+					Kind:  "Gateway",
+					Name:  "obp-xns-gw",
+				}},
+				Replicas: 3,
+				MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{
+					Name:      "obp-xns-master",
+					Namespace: "obp-xns-target",
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, pol)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, pol) })
+
+		got := reconcileOBP(pol.Name, pol.Namespace)
+		assertOBPAccepted(got, metav1.ConditionTrue, ReasonOBPAccepted)
+	})
+
+	It("cross-namespace master key: Accepted=False / MasterKeyCrossNamespaceDenied without ReferenceGrant", func() {
+		otherNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "obp-xns-deny-target"}}
+		if err := k8sClient.Create(ctx, otherNS); err != nil {
+			Expect(client_IgnoreAlreadyExists(err)).NotTo(HaveOccurred())
+		}
+
+		makeGateway("obp-xns-deny-gw")
+
+		kp, err := tor.GenerateKeyPair(nil)
+		Expect(err).NotTo(HaveOccurred())
+		crossSec := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "obp-xns-deny-master", Namespace: "obp-xns-deny-target"},
+			Data: map[string][]byte{
+				"hs_ed25519_secret_key": kp.SecretKeyFile(),
+				"hs_ed25519_public_key": kp.PublicKeyFile(),
+			},
+		}
+		Expect(k8sClient.Create(ctx, crossSec)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, crossSec) })
+
+		pol := &policyv1alpha1.OnionBalancePolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "obp-xns-deny", Namespace: "default"},
+			Spec: policyv1alpha1.OnionBalancePolicySpec{
+				TargetRefs: []gwv1.LocalPolicyTargetReference{{
+					Group: "gateway.networking.k8s.io",
+					Kind:  "Gateway",
+					Name:  "obp-xns-deny-gw",
+				}},
+				Replicas: 3,
+				MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{
+					Name:      "obp-xns-deny-master",
+					Namespace: "obp-xns-deny-target",
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, pol)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, pol) })
+
+		got := reconcileOBP(pol.Name, pol.Namespace)
+		assertOBPAccepted(got, metav1.ConditionFalse, ReasonOBPMasterKeyCrossNSDenied)
+	})
+
+	It("PoW override: Accepted=True message notes onionbalance#13 when TSP has PoW enabled", func() {
+		makeGateway("obp-pow-gw")
+		makeValidSecret("obp-pow-master")
+
+		pow := true
+		tsp := &policyv1alpha1.TorServicePolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "obp-pow-tsp", Namespace: "default"},
+			Spec: policyv1alpha1.TorServicePolicySpec{
+				TargetRefs: []gwv1.LocalPolicyTargetReference{{
+					Group: "gateway.networking.k8s.io",
+					Kind:  "Gateway",
+					Name:  "obp-pow-gw",
+				}},
+				PoWDefensesEnabled: &pow,
+			},
+		}
+		Expect(k8sClient.Create(ctx, tsp)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, tsp) })
+
+		pol := makeOBP("obp-pow", "obp-pow-gw", "obp-pow-master")
+		got := reconcileOBP(pol.Name, pol.Namespace)
+		assertOBPAccepted(got, metav1.ConditionTrue, ReasonOBPAccepted)
+
+		var msg string
+		for _, c := range got.Status.Ancestors[0].Conditions {
+			if c.Type == string(gwv1.PolicyConditionAccepted) {
+				msg = c.Message
+				break
+			}
+		}
+		Expect(msg).To(ContainSubstring("onionbalance#13"))
 	})
 
 	It("multi-target: both ancestors Accepted=True and readyBackends is sum (0+0) not silently dropped", func() {

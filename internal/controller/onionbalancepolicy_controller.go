@@ -191,17 +191,58 @@ func (r *OnionBalancePolicyReconciler) validateMasterKey(ctx context.Context, po
 	return err
 }
 
-// Stubs replaced by Task 9.
-func powForcedOff(_ context.Context, _ client.Client, _ *gwv1.Gateway) bool { return false }
-func countReadyBackends(_ context.Context, _ client.Client, _ *gwv1.Gateway) (int32, error) {
-	return 0, nil
-}
-func masterKeyReferenceGrantAllows(_ context.Context, _ client.Client, _ *policyv1alpha1.OnionBalancePolicy, _ string) (bool, error) {
-	return true, nil
+func countReadyBackends(ctx context.Context, c client.Client, gw *gwv1.Gateway) (int32, error) {
+	var list corev1.SecretList
+	if err := c.List(ctx, &list,
+		client.InNamespace(gw.Namespace),
+		client.MatchingLabels{
+			gatewayLabelKey:      gw.Name,
+			"torgateway.io/role": "backend",
+		},
+	); err != nil {
+		return 0, fmt.Errorf("list backend Secrets: %w", err)
+	}
+	var ready int32
+	for i := range list.Items {
+		if v, ok := list.Items[i].Data["hostname"]; ok && len(v) > 0 {
+			ready++
+		}
+	}
+	return ready, nil
 }
 
-// Avoid unused-import on gwv1beta1 until Task 9 uses ReferenceGrantList.
-var _ = gwv1beta1.ReferenceGrant{}
+func powForcedOff(ctx context.Context, c client.Client, gw *gwv1.Gateway) bool {
+	var tsps policyv1alpha1.TorServicePolicyList
+	if err := c.List(ctx, &tsps, client.InNamespace(gw.Namespace)); err != nil {
+		return false
+	}
+	for i := range tsps.Items {
+		t := &tsps.Items[i]
+		if !policyTargets(t.Spec.TargetRefs, gw.Name) {
+			continue
+		}
+		if t.Spec.PoWDefensesEnabled == nil || *t.Spec.PoWDefensesEnabled {
+			return true
+		}
+	}
+	return false
+}
+
+func masterKeyReferenceGrantAllows(ctx context.Context, c client.Client, pol *policyv1alpha1.OnionBalancePolicy, targetNS string) (bool, error) {
+	var grantList gwv1beta1.ReferenceGrantList
+	if err := c.List(ctx, &grantList, client.InNamespace(targetNS)); err != nil {
+		return false, err
+	}
+	return Allows(grantList.Items, FromRef{
+		Group:     "policy.torgateway.io",
+		Kind:      "OnionBalancePolicy",
+		Namespace: pol.Namespace,
+	}, ToRef{
+		Group: "",
+		Kind:  "Secret",
+		Name:  pol.Spec.MasterKeySecretRef.Name,
+	}), nil
+}
 
 // SetupWithManager registers the reconciler.
 func (r *OnionBalancePolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
