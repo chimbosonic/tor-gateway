@@ -211,6 +211,9 @@ func countReadyBackends(ctx context.Context, c client.Client, gw *gwv1.Gateway) 
 	return ready, nil
 }
 
+// powForcedOff returns true when PoW WILL be force-disabled on backends —
+// i.e. when a TorServicePolicy targeting the Gateway has PoW enabled (the
+// directive is unconditionally omitted on onionbalance backends per onionbalance#13).
 func powForcedOff(ctx context.Context, c client.Client, gw *gwv1.Gateway) bool {
 	var tsps policyv1alpha1.TorServicePolicyList
 	if err := c.List(ctx, &tsps, client.InNamespace(gw.Namespace)); err != nil {
