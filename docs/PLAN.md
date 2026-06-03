@@ -100,7 +100,7 @@ Direct Policy attachment (GEP-2648): each policy `targetRefs` one or more Gatewa
 |---|---|
 | `TorServicePolicy` | Vanity prefix, log level, `poWDefensesEnabled`, resource requests, key rotation. |
 | `TorClientAuthPolicy` | v3 client auth; references a Secret of client x25519 public keys; `Strict` / `Audit` mode. |
-| `OnionBalancePolicy` | HA via onionbalance: `replicas` (1–12), `refreshInterval`, `masterKeySecretRef`. |
+| `OnionBalancePolicy` | HA via onionbalance: `replicas` (1–8), `refreshInterval`, `masterKeySecretRef`. |
 
 ### Deliberately excluded
 
