@@ -58,7 +58,7 @@ cosign verify-attestation --type spdxjson ghcr.io/chimbosonic/tor-gateway-manage
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-The same verification applies to the other images the chart deploys: `tor-gateway-router`, `tor-gateway-tor-init`, `tor-gateway-vanity-finalize`, `mkp224o`, `tor`, and (for the HA path) `tor-gateway-obrefresh`.
+The same verification applies to the other images the chart deploys: `tor-gateway-router`, `tor-gateway-tor-init`, `tor-gateway-vanity-finalize`, `mkp224o`, `tor`, and (for the HA path) `tor-gateway-obrefresh` and `tor-gateway-onionbalance`.
 
 ## Releasing
 

@@ -36,6 +36,8 @@ spec:
             - --mkp224o-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.mkp224oImage .) }}
             - --vanity-finalize-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.vanityFinalizeImage .) }}
             - --vanity-active-deadline={{ .Values.torRuntime.vanityActiveDeadline }}
+            - --onionbalance-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.onionbalanceImage .) }}
+            - --obrefresh-image={{ include "tor-gateway.runtimeImage" (list .Values.torRuntime.obrefreshImage .) }}
             - --tor-pod-network-policy-enabled={{ .Values.torPodNetworkPolicy.enabled }}
             {{- with .Values.torPodNetworkPolicy.clusterPodCIDRs }}
             - --cluster-pod-cidrs={{ join "," . }}
