@@ -74,7 +74,7 @@ func TestBuildBackendKeySecret_NamingAndLabels(t *testing.T) {
 	}
 }
 
-func TestBuildBackendKeySecret_DataAndNoHostname(t *testing.T) {
+func TestBuildBackendKeySecret_DataAndHostname(t *testing.T) {
 	scheme := testScheme(t)
 	gw := sampleGateway()
 
@@ -86,13 +86,13 @@ func TestBuildBackendKeySecret_DataAndNoHostname(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"hs_ed25519_secret_key", "hs_ed25519_public_key"} {
+	for _, key := range []string{"hs_ed25519_secret_key", "hs_ed25519_public_key", "hostname"} {
 		if len(s.Data[key]) == 0 {
 			t.Fatalf("Secret missing populated data[%q]", key)
 		}
 	}
-	if _, ok := s.Data["hostname"]; ok {
-		t.Fatal("Secret must NOT pre-populate the hostname key")
+	if got, want := string(s.Data["hostname"]), kp.OnionAddress().String(); got != want {
+		t.Fatalf("hostname: got %q want %q", got, want)
 	}
 }
 
@@ -222,11 +222,12 @@ func TestBuildBackendStatefulSet_InitContainerArgs(t *testing.T) {
 		t.Fatalf("init container args missing --per-pod-keys-base; got %v", args)
 	}
 
-	// Must NOT include --src (would clobber per-pod keys).
-	for _, a := range args {
-		if a == "--src" || strings.HasPrefix(a, "--src=") {
-			t.Fatalf("init container must NOT pass --src; got %v", args)
-		}
+	// Must pass --src= explicitly (empty value), which tells tor-init to
+	// skip the Mode A key-Secret copy. Without the flag, tor-init would
+	// fall back to the default "/etc/tor-keys" and either crash (path
+	// doesn't exist on backends) or clobber the per-pod keys.
+	if !slices.Contains(args, "--src=") {
+		t.Fatalf("init container must pass --src= (empty) to skip the Mode A copy; got %v", args)
 	}
 }
 

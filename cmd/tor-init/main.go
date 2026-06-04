@@ -82,25 +82,29 @@ func run(src, dst, clientAuthSrc, perPodKeysBase, obMasterAddress string) error 
 		slog.Info("tor-init: per-pod keys copied", "pod", podName, "base", perPodKeysBase)
 	}
 
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		// Secret/ConfigMap mounts expose a `..data` symlink to a timestamped
-		// dir plus the timestamped dir itself; os.Stat follows symlinks, so
-		// non-regular entries (those dirs) are skipped and only the projected
-		// key files are copied.
-		info, err := os.Stat(srcPath)
+	// HA backends pass --src="" because --per-pod-keys-base supplies the
+	// keys; in that case there's no Mode A key-Secret to walk.
+	if src != "" {
+		entries, err := os.ReadDir(src)
 		if err != nil {
 			return err
 		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-		if err := copyFile(srcPath, filepath.Join(dst, entry.Name())); err != nil {
-			return err
+		for _, entry := range entries {
+			srcPath := filepath.Join(src, entry.Name())
+			// Secret/ConfigMap mounts expose a `..data` symlink to a timestamped
+			// dir plus the timestamped dir itself; os.Stat follows symlinks, so
+			// non-regular entries (those dirs) are skipped and only the projected
+			// key files are copied.
+			info, err := os.Stat(srcPath)
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				continue
+			}
+			if err := copyFile(srcPath, filepath.Join(dst, entry.Name())); err != nil {
+				return err
+			}
 		}
 	}
 

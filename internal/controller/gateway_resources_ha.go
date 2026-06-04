@@ -73,6 +73,10 @@ func BuildBackendKeySecret(gw *gwv1.Gateway, idx int, kp *tor.KeyPair, scheme *r
 			return nil, fmt.Errorf("generate backend key: %w", err)
 		}
 	}
+	// Pre-compute the .onion address here: obrefresh's readiness check
+	// keys off Secret.Data["hostname"], and we own this Secret end-to-end
+	// (no tor-side write-back is needed). Without this field the refresher
+	// treats every backend as not-yet-ready and never writes a real config.
 	s := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      BackendKeySecretName(gw, idx),
@@ -83,6 +87,7 @@ func BuildBackendKeySecret(gw *gwv1.Gateway, idx int, kp *tor.KeyPair, scheme *r
 		Data: map[string][]byte{
 			"hs_ed25519_secret_key": kp.SecretKeyFile(),
 			"hs_ed25519_public_key": kp.PublicKeyFile(),
+			"hostname":              []byte(kp.OnionAddress().String()),
 		},
 	}
 	if err := controllerutil.SetControllerReference(gw, s, scheme); err != nil {
@@ -151,7 +156,12 @@ func BuildBackendStatefulSet(
 				Name:  initContainerName,
 				Image: images.TorInit,
 				Args: []string{
-					"--hs-dir=/var/lib/tor/hs",
+					// Same subdirectory pattern as Mode A (see hsServiceDir):
+					// the volume mount root is root-owned, so tor-init operates
+					// on a subdir it creates itself (owned by 65532), allowing
+					// the subsequent chmod to succeed.
+					"--dst=" + hsServiceDir,
+					"--src=", // skip the Mode A key-Secret copy; --per-pod-keys-base supplies the keys
 					"--ob-master-address=" + master.String(),
 					"--per-pod-keys-base=/var/lib/tor-keys",
 				},
@@ -253,6 +263,10 @@ func backendInitVolumeMounts() []corev1.VolumeMount {
 func backendTorVolumeMounts() []corev1.VolumeMount {
 	return []corev1.VolumeMount{
 		{Name: "hs", MountPath: hsDirMountPath},
+		// tor-data carries Tor's DataDirectory (descriptors, cookies, etc.).
+		// Mode A mounts the same emptyDir; without it Tor cannot write under
+		// the read-only rootfs and fails to start.
+		{Name: dataVolumeName, MountPath: dataMountPath},
 		{Name: "torrc", MountPath: configMountPath, ReadOnly: true},
 	}
 }
@@ -272,6 +286,7 @@ func backendPodVolumes(gw *gwv1.Gateway, replicas int32) []corev1.Volume {
 	}
 	return []corev1.Volume{
 		{Name: "hs", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: dataVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: "keys", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: sources}}},
 		{Name: "torrc", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: BackendTorrcConfigMapName(gw)},
