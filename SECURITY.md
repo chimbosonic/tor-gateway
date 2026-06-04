@@ -69,6 +69,28 @@ instances. Mode-B-specific security properties:
   cap. v1 documents but does not enforce. If you set `replicas` close
   to the cap (8) AND run Vanguards, monitor descriptor sizes.
 
+### Testing mode (chutney)
+
+The operator accepts a `--testing-tor-network-file=<path>` flag that
+splices `TestingTorNetwork 1` + a caller-provided `DirAuthority` block
+into every Tor pod's torrc. This exists to let our e2e tests bootstrap
+against a private chutney-managed Tor network, with ~30-second
+descriptor publication instead of the public Tor network's 5-15 minute
+cycle.
+
+**Never enable this in production.** When the flag is set, every
+`.onion` the operator publishes is resolvable only by clients
+participating in the configured testing network. A production cluster
+that accidentally enabled the flag would silently publish unreachable
+addresses.
+
+The Helm chart's `testingTorNetwork.enabled` value defaults to `false`.
+Explicit opt-in is required.
+
+Do NOT reuse the same `.onion` keys between testing and production
+deployments — once a key has been published to a chutney testing
+network, it should be retired.
+
 ### Known gaps
 
 - **NetworkPolicy is opt-out per-Gateway** (v0.3.2). The operator emits a per-Gateway egress NetworkPolicy whitelisting DNS, kube-apiserver, the resolved HTTPRoute backend Services (cross-namespace gated by ReferenceGrant), and the public internet. The `clusterPodCIDRs` chart value MUST be set to your cluster's pod CIDR(s) for cluster-lateral lockdown to bite — without it, the broad public-internet rule allows in-cluster destinations too. CNIs without NetworkPolicy support (e.g. default Flannel) silently no-op the policy.

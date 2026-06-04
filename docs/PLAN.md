@@ -25,6 +25,12 @@ Implemented and tested:
 - Distribution — the Helm chart installs a functional operator (RBAC + policy CRDs synced from `config/` via `make chart-sync`, CI drift guard, kind deploy-smoke). A `vX.Y.Z` tag publishes multi-arch, cosign-signed images + chart (OCI `ghcr.io` + GitHub Pages) with SBOM attestations; first tag `v0.1.0`, current `v0.3.3` (pending).
 - NetworkPolicy — per-Gateway egress NetworkPolicy emitted by the operator (v0.3.2). Egress allow-list: DNS, kube-apiserver, the resolved HTTPRoute backend Services (cross-ns gated by ReferenceGrant), and the public internet minus chart-supplied cluster pod CIDRs. Opt-out via `torPodNetworkPolicy.enabled=false`.
 - HA via onionbalance (Mode B) — `OnionBalancePolicy` provisions a frontend Deployment (vanilla tor + onionbalance + obrefresh sidecar) and a backend StatefulSet (1–8 Tor instances each running `HiddenServiceOnionbalanceInstance 1`); master `.onion` published from a user-supplied Secret; PoW force-disabled on backends per upstream onionbalance#13; per-Gateway egress NetworkPolicy automatically covers both pod sets via shared `torgateway.io/gateway` label; real-Tor HA e2e fetches the master `.onion`, kills a backend, scales down, and verifies the address still serves.
+- Testing infrastructure — e2e suite runs against an in-cluster
+  chutney private Tor network (`images/chutney`, custom `k8s-mini`
+  flavor). Bootstrap ~60-90 s; per-test HS publish ~30-60 s; full
+  suite ~5 min. One `make test-e2e-realtor` target keeps a single
+  dataplane fetch as a smoke against the public Tor network for
+  production validation.
 
 The critical path to a functionally deployable operator — container images, a real-Tor data-plane e2e, and a published, signed chart — is complete. Cross-namespace `ReferenceGrant` shipped in `v0.3.0` (controller authority for `backendRefs`; router fail-closed); data-plane liveness/readiness/startup probes and `events: create;patch` RBAC shipped in `v0.3.1`; per-Gateway egress NetworkPolicy (ReferenceGrant-aware) shipped in `v0.3.2`. All v1-target features shipped: onionbalance HA (`OnionBalancePolicy`) landed in the next release tag (human picks the version at tag time per CLAUDE.md).
 
