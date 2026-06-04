@@ -278,7 +278,11 @@ spec:
 		}, "3m", "5s").Should(Equal("1"), "StatefulSet should scale down to 1 ready replica")
 
 		By("verifying the master .onion still serves / after scale-down")
-		Eventually(fetchOverTor("ha-tor-client", "/"), "3m", "10s").
+		// Budget covers: obrefresh interval (30s) + SIGHUP + OB re-renders
+		// descriptor with the smaller backend set + HSDir publish (testnet
+		// publish-check 10s) + client re-lookup (testnet fetch 20s).
+		// Typical ~90s on warm Mac, more headroom for cold CI runners.
+		Eventually(fetchOverTor("ha-tor-client", "/"), "5m", "10s").
 			Should(Equal("backend-A"), "service should remain up after scale to 1 replica")
 	})
 })
