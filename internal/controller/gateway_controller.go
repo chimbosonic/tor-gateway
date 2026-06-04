@@ -166,14 +166,8 @@ func (r *GatewayReconciler) reconcileModeA(ctx context.Context, logger interface
 	}
 
 	// 3. Per-Gateway RBAC for the router sidecar (SA must exist before the pod).
-	if err := r.ensureServiceAccount(ctx, gw); err != nil {
-		return ctrl.Result{}, fmt.Errorf("ensure service account: %w", err)
-	}
-	if err := r.ensureRole(ctx, gw); err != nil {
-		return ctrl.Result{}, fmt.Errorf("ensure role: %w", err)
-	}
-	if err := r.ensureRoleBinding(ctx, gw); err != nil {
-		return ctrl.Result{}, fmt.Errorf("ensure rolebinding: %w", err)
+	if err := r.ensureRouterRBAC(ctx, gw); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// 4. Deployment.
@@ -458,6 +452,19 @@ func (r *GatewayReconciler) ensureDeployment(
 	return current, nil
 }
 
+func (r *GatewayReconciler) ensureRouterRBAC(ctx context.Context, gw *gwv1.Gateway) error {
+	if err := r.ensureServiceAccount(ctx, gw); err != nil {
+		return fmt.Errorf("router ServiceAccount: %w", err)
+	}
+	if err := r.ensureRole(ctx, gw); err != nil {
+		return fmt.Errorf("router Role: %w", err)
+	}
+	if err := r.ensureRoleBinding(ctx, gw); err != nil {
+		return fmt.Errorf("router RoleBinding: %w", err)
+	}
+	return nil
+}
+
 func (r *GatewayReconciler) ensureServiceAccount(ctx context.Context, gw *gwv1.Gateway) error {
 	desired, err := BuildServiceAccount(gw, r.Scheme)
 	if err != nil {
@@ -674,16 +681,9 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 
 	// Backend pods run the same router sidecar as Mode A and reference the
 	// same per-Gateway router SA/Role/RoleBinding. Mode A's reconcile path
-	// creates them; in a fresh Mode B namespace they don't exist yet, so
-	// ensure them here too. CreateOrUpdate is idempotent in either case.
-	if err := r.ensureServiceAccount(ctx, gw); err != nil {
-		return fmt.Errorf("router ServiceAccount: %w", err)
-	}
-	if err := r.ensureRole(ctx, gw); err != nil {
-		return fmt.Errorf("router Role: %w", err)
-	}
-	if err := r.ensureRoleBinding(ctx, gw); err != nil {
-		return fmt.Errorf("router RoleBinding: %w", err)
+	// creates them; in a fresh Mode B namespace they don't exist yet.
+	if err := r.ensureRouterRBAC(ctx, gw); err != nil {
+		return err
 	}
 
 	ss, err := BuildBackendStatefulSet(gw, pol, master, r.Images, r.Scheme)
