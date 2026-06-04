@@ -561,7 +561,7 @@ func TestBuildFrontendRoleBinding(t *testing.T) {
 func TestBuildFrontendTorrcConfigMap(t *testing.T) {
 	gw := sampleGateway()
 	scheme := testScheme(t)
-	cm, err := BuildFrontendTorrcConfigMap(gw, scheme)
+	cm, err := BuildFrontendTorrcConfigMap(gw, "", scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,6 +580,54 @@ func TestBuildFrontendTorrcConfigMap(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "MetricsPort 0.0.0.0:9035") {
 		t.Errorf("frontend torrc must enable MetricsPort on 9035 (the kubelet probe target):\n%s", rendered)
+	}
+}
+
+func TestBuildFrontendTorrcConfigMap_PropagatesTestingNetworkIncludePath(t *testing.T) {
+	gw := sampleGateway()
+	scheme := testScheme(t)
+	const path = "/etc/tor-gateway/testing-network/fragment"
+	cm, err := BuildFrontendTorrcConfigMap(gw, path, scheme) // new path arg before scheme
+	if err != nil {
+		t.Fatalf("BuildFrontendTorrcConfigMap: %v", err)
+	}
+	rendered := cm.Data["torrc"]
+	for _, required := range []string{
+		"TestingTorNetwork 1",
+		"ClientUseIPv6 0",
+		"%include " + path,
+		// Frontend torrc fundamentals MUST be preserved:
+		"ControlPort",
+		"CookieAuthentication 1",
+		"MetricsPort 0.0.0.0:9035",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Errorf("expected %q in frontend torrc:\n%s", required, rendered)
+		}
+	}
+	if strings.Contains(rendered, "HiddenService") {
+		t.Errorf("frontend torrc must NOT contain HiddenService directives:\n%s", rendered)
+	}
+}
+
+func TestBuildFrontendTorrcConfigMap_EmptyPathEmitsNoTestingBlock(t *testing.T) {
+	gw := sampleGateway()
+	scheme := testScheme(t)
+	cm, err := BuildFrontendTorrcConfigMap(gw, "", scheme)
+	if err != nil {
+		t.Fatalf("BuildFrontendTorrcConfigMap: %v", err)
+	}
+	rendered := cm.Data["torrc"]
+	for _, denied := range []string{"TestingTorNetwork", "%include", "ClientUseIPv6 0"} {
+		if strings.Contains(rendered, denied) {
+			t.Errorf("frontend torrc must not contain %q with empty path; got:\n%s", denied, rendered)
+		}
+	}
+	// And the production essentials MUST still be there:
+	for _, required := range []string{"ControlPort", "CookieAuthentication 1", "MetricsPort"} {
+		if !strings.Contains(rendered, required) {
+			t.Errorf("frontend torrc missing %q with empty path:\n%s", required, rendered)
+		}
 	}
 }
 

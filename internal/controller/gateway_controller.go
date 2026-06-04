@@ -638,7 +638,7 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 		return fmt.Errorf("frontend RoleBinding: %w", err)
 	}
 
-	frontendTorrc, err := BuildFrontendTorrcConfigMap(gw, r.Scheme)
+	frontendTorrc, err := BuildFrontendTorrcConfigMap(gw, r.TestingNetworkIncludePath, r.Scheme)
 	if err != nil {
 		return err
 	}
