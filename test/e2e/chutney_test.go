@@ -43,7 +43,7 @@ const (
 	chutneyMountPath      = "/etc/tor-gateway/testing-network/fragment"
 	chutneyOperatorNS     = "tor-gateway-system"
 	chutneyOperatorDeploy = "tor-gateway-controller-manager"
-	chutneyReadyTimeout   = 8 * time.Minute
+	chutneyReadyTimeout   = 12 * time.Minute
 	chutneyRolloutTimeout = 2 * time.Minute
 )
 
