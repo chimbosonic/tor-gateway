@@ -32,6 +32,7 @@ TOR_IMG ?= $(REGISTRY)/tor:$(TOR_IMAGE_TAG)
 MKP224O_IMG ?= $(REGISTRY)/mkp224o:$(IMAGE_TAG)
 ONIONBALANCE_IMG ?= $(REGISTRY)/tor-gateway-onionbalance:$(IMAGE_TAG)
 VANITYFINALIZE_IMG ?= $(REGISTRY)/tor-gateway-vanity-finalize:$(IMAGE_TAG)
+CHUTNEY_IMG ?= $(REGISTRY)/tor-gateway-chutney:$(IMAGE_TAG)
 IMG ?= $(MANAGER_IMG)
 
 # When CONTAINER_TOOL is podman, point kind at podman too so the cluster
@@ -184,7 +185,7 @@ run: manifests generate fmt vet ## Run the manager from your host.
 
 # Build all container images. Defaults to docker; override via CONTAINER_TOOL=podman.
 .PHONY: images
-images: image-manager image-router image-obrefresh image-tor-init image-tor image-mkp224o image-onionbalance image-vanity-finalize ## Build all container images.
+images: image-manager image-router image-obrefresh image-tor-init image-tor image-mkp224o image-onionbalance image-vanity-finalize image-chutney ## Build all container images.
 
 .PHONY: image-manager
 image-manager:
@@ -217,6 +218,10 @@ image-onionbalance:
 .PHONY: image-vanity-finalize
 image-vanity-finalize:
 	$(CONTAINER_TOOL) build --build-arg BINARY=vanity-finalize -t $(VANITYFINALIZE_IMG) .
+
+.PHONY: image-chutney
+image-chutney: ## Build the chutney testing-network image (e2e-only).
+	$(CONTAINER_TOOL) build -t $(CHUTNEY_IMG) images/chutney
 
 # Back-compat single-image target. Honors IMG=... so callers (notably the
 # e2e suite's BeforeSuite, which invokes `make docker-build IMG=...`) tag
