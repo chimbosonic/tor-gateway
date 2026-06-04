@@ -120,6 +120,13 @@ func main() {
 		"Comma-separated CIDRs excluded from the broad public-internet egress rule "+
 			"(cluster pod nets); required for real lockdown.")
 
+	var testingTorNetworkFile string
+	flag.StringVar(&testingTorNetworkFile, "testing-tor-network-file", "",
+		"if set, path to a file containing DirAuthority lines that will be "+
+			"appended (via Tor's %include directive) to every Tor pod's "+
+			"torrc, along with TestingTorNetwork 1 and ClientUseIPv6 0. "+
+			"Test-only — never set in production.")
+
 	opts := zap.Options{
 		Development: true,
 	}
@@ -256,6 +263,7 @@ func main() {
 		APIReader:                  mgr.GetAPIReader(),
 		TorPodNetworkPolicyEnabled: torPodNetworkPolicyEnabled,
 		ClusterPodCIDRs:            clusterPodCIDRs,
+		TestingNetworkIncludePath:  testingTorNetworkFile,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "gateway")
 		os.Exit(1)

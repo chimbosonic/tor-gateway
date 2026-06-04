@@ -55,6 +55,11 @@ type GatewayReconciler struct {
 	APIReader                  client.Reader
 	TorPodNetworkPolicyEnabled bool
 	ClusterPodCIDRs            []string
+	// TestingNetworkIncludePath, when non-empty, is propagated into every
+	// rendered torrc as `%include <path>` (preceded by TestingTorNetwork 1
+	// + ClientUseIPv6 0). Source: the --testing-tor-network-file manager
+	// flag. Empty in production; only the e2e harness sets it.
+	TestingNetworkIncludePath string
 }
 
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch;update;patch
