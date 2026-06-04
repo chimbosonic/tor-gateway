@@ -149,7 +149,14 @@ spec:
 		By("backend is reachable from the prober (per-backend rule allows)")
 		Eventually(curlFromProber("http://backend."+ns+".svc:5678/"), "60s", "5s").Should(ContainSubstring("backend"))
 
-		By("victim is NOT reachable (no rule allows)")
+		// kindnetd programs NetworkPolicy iptables rules asynchronously
+		// after a pod is scheduled — there's a brief window where the new
+		// prober has no NP applied. Wait for the rule to begin enforcing
+		// before asserting steady-state.
+		By("waiting for the NetworkPolicy to start blocking victim")
+		Eventually(curlFromProber("http://victim."+ns+".svc:5678/"), "30s", "2s").ShouldNot(ContainSubstring("victim"))
+
+		By("victim stays NOT reachable (no rule allows)")
 		Consistently(curlFromProber("http://victim."+ns+".svc:5678/"), "20s", "5s").ShouldNot(ContainSubstring("victim"))
 	})
 })
