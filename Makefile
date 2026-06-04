@@ -122,7 +122,7 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 	# -timeout 45m: several specs wait on real Tor hidden-service descriptor
 	# publish/lookup (~8m budget each), run serially; the default 10m would
 	# kill the binary mid-suite.
-	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) CERT_MANAGER_INSTALL_SKIP=true \
+	TOR_GATEWAY_E2E_MODE=chutney KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) CERT_MANAGER_INSTALL_SKIP=true \
 		go test -tags=e2e -timeout 45m ./test/e2e/ -v -ginkgo.v
 	$(MAKE) cleanup-test-e2e
 
