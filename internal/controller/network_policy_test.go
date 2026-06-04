@@ -25,7 +25,7 @@ func gwForNPTest() *gwv1.Gateway {
 }
 
 func TestBuildNetworkPolicy_HasDNSRule(t *testing.T) {
-	np, err := BuildNetworkPolicy(gwForNPTest(), nil, nil, testScheme(t))
+	np, err := BuildNetworkPolicy(gwForNPTest(), nil, nil, "", testScheme(t))
 	if err != nil {
 		t.Fatalf("BuildNetworkPolicy: %v", err)
 	}
@@ -66,7 +66,7 @@ func hasPort(r *netv1.NetworkPolicyEgressRule, protocol string, port int) bool {
 }
 
 func TestBuildNetworkPolicy_HasAPIServerRule(t *testing.T) {
-	np, err := BuildNetworkPolicy(gwForNPTest(), nil, nil, testScheme(t))
+	np, err := BuildNetworkPolicy(gwForNPTest(), nil, nil, "", testScheme(t))
 	if err != nil {
 		t.Fatalf("BuildNetworkPolicy: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestBuildNetworkPolicy_HasAPIServerRule(t *testing.T) {
 }
 
 func TestBuildNetworkPolicy_PublicEgress_NoExceptWhenCIDRsEmpty(t *testing.T) {
-	np, err := BuildNetworkPolicy(gwForNPTest(), nil, nil, testScheme(t))
+	np, err := BuildNetworkPolicy(gwForNPTest(), nil, nil, "", testScheme(t))
 	if err != nil {
 		t.Fatalf("BuildNetworkPolicy: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestBuildNetworkPolicy_PublicEgress_NoExceptWhenCIDRsEmpty(t *testing.T) {
 
 func TestBuildNetworkPolicy_PublicEgress_ExceptPopulatedWhenCIDRsSet(t *testing.T) {
 	cidrs := []string{"10.244.0.0/16", "fd00::/64"}
-	np, err := BuildNetworkPolicy(gwForNPTest(), nil, cidrs, testScheme(t))
+	np, err := BuildNetworkPolicy(gwForNPTest(), nil, cidrs, "", testScheme(t))
 	if err != nil {
 		t.Fatalf("BuildNetworkPolicy: %v", err)
 	}
@@ -128,6 +128,38 @@ func TestBuildNetworkPolicy_PublicEgress_ExceptPopulatedWhenCIDRsSet(t *testing.
 
 func lastEgress(np *netv1.NetworkPolicy) netv1.NetworkPolicyEgressRule {
 	return np.Spec.Egress[len(np.Spec.Egress)-1]
+}
+
+func TestBuildNetworkPolicy_TestingNetworkEgress(t *testing.T) {
+	cidrs := []string{"10.244.0.0/16"}
+	np, err := BuildNetworkPolicy(gwForNPTest(), nil, cidrs, "tor-gateway-chutney", testScheme(t))
+	if err != nil {
+		t.Fatalf("BuildNetworkPolicy: %v", err)
+	}
+	if got := findEgressByNSLabel(np, "tor-gateway-chutney"); got == nil {
+		t.Fatalf("missing chutney-namespace egress rule; rules=%+v", np.Spec.Egress)
+	}
+	// The public-internet rule must still carry Except — cluster-pod
+	// isolation stays intact for everything outside the chutney ns.
+	pub := lastEgress(np)
+	if pub.To[0].IPBlock == nil || !slicesEqual(pub.To[0].IPBlock.Except, cidrs) {
+		t.Errorf("public-internet rule lost Except: got %+v", pub)
+	}
+}
+
+func TestBuildNetworkPolicy_TestingNetworkOmittedByDefault(t *testing.T) {
+	np, err := BuildNetworkPolicy(gwForNPTest(), nil, nil, "", testScheme(t))
+	if err != nil {
+		t.Fatalf("BuildNetworkPolicy: %v", err)
+	}
+	for _, r := range np.Spec.Egress {
+		for _, to := range r.To {
+			if to.NamespaceSelector != nil &&
+				to.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] == "tor-gateway-chutney" {
+				t.Fatalf("unexpected chutney egress rule in production mode: %+v", r)
+			}
+		}
+	}
 }
 
 func slicesEqual(a, b []string) bool {
@@ -157,7 +189,7 @@ func TestBuildNetworkPolicy_PerBackendRules(t *testing.T) {
 			Protocol:    corev1.ProtocolTCP,
 		},
 	}
-	np, err := BuildNetworkPolicy(gwForNPTest(), backends, nil, testScheme(t))
+	np, err := BuildNetworkPolicy(gwForNPTest(), backends, nil, "", testScheme(t))
 	if err != nil {
 		t.Fatalf("BuildNetworkPolicy: %v", err)
 	}
@@ -189,7 +221,7 @@ func TestBuildNetworkPolicy_PerBackendRules_SortedDeterministically(t *testing.T
 		{Namespace: "z", PodSelector: map[string]string{"a": "1"}, TargetPort: intstr.FromInt(80), Protocol: corev1.ProtocolTCP},
 		{Namespace: "a", PodSelector: map[string]string{"a": "1"}, TargetPort: intstr.FromInt(80), Protocol: corev1.ProtocolTCP},
 	}
-	np, err := BuildNetworkPolicy(gwForNPTest(), backends, nil, testScheme(t))
+	np, err := BuildNetworkPolicy(gwForNPTest(), backends, nil, "", testScheme(t))
 	if err != nil {
 		t.Fatalf("BuildNetworkPolicy: %v", err)
 	}
@@ -202,7 +234,7 @@ func TestBuildNetworkPolicy_PerBackendRules_SortedDeterministically(t *testing.T
 
 func TestBuildNetworkPolicy_RejectsEmptyPodSelector(t *testing.T) {
 	bad := []ResolvedBackend{{Namespace: "x", PodSelector: nil, TargetPort: intstr.FromInt(80), Protocol: corev1.ProtocolTCP}}
-	_, err := BuildNetworkPolicy(gwForNPTest(), bad, nil, testScheme(t))
+	_, err := BuildNetworkPolicy(gwForNPTest(), bad, nil, "", testScheme(t))
 	if err == nil {
 		t.Fatal("expected error for empty PodSelector")
 	}
@@ -210,7 +242,7 @@ func TestBuildNetworkPolicy_RejectsEmptyPodSelector(t *testing.T) {
 
 func TestNetworkPolicySelectsBothModeBPodSets(t *testing.T) {
 	gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "blog", Namespace: "prod"}}
-	np, err := BuildNetworkPolicy(gw, nil, nil, testScheme(t))
+	np, err := BuildNetworkPolicy(gw, nil, nil, "", testScheme(t))
 	if err != nil {
 		t.Fatal(err)
 	}

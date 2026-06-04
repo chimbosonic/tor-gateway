@@ -44,6 +44,9 @@ spec:
             {{- end }}
             {{- if .Values.testingTorNetwork.enabled }}
             - --testing-tor-network-file=/etc/tor-gateway/testing-network/fragment
+            {{- with .Values.testingTorNetwork.podNamespace }}
+            - --testing-tor-network-namespace={{ . }}
+            {{- end }}
             {{- end }}
           ports:
             - name: health

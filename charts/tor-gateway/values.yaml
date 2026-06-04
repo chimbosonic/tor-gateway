@@ -129,6 +129,10 @@ testingTorNetwork:
   # ConfigMap (must exist in the release namespace) whose data["fragment"]
   # field contains the TestingTorNetwork 1 + DirAuthority block.
   configMapName: ""
+  # Namespace running the chutney pod. The per-Gateway NetworkPolicy gets
+  # an extra egress rule allowing all pods in this namespace so Tor can
+  # reach the chutney authorities without dropping cluster-pod isolation.
+  podNamespace: ""
 
 # Pod-level extras (annotations, labels, priority class).
 podAnnotations: {}

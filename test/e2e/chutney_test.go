@@ -127,8 +127,10 @@ func patchOperatorForChutney() {
 	// the live object); strategic-merge handles volumes + volumeMounts (those
 	// arrays are absent/null after kustomize serialisation, so JSON-patch
 	// "add" with "/-" fails on them — strategic-merge creates them on the fly).
-	argsPatch := fmt.Sprintf(`[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--testing-tor-network-file=%s"}]`,
-		chutneyMountPath)
+	argsPatch := fmt.Sprintf(`[
+		{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--testing-tor-network-file=%s"},
+		{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--testing-tor-network-namespace=%s"}
+	]`, chutneyMountPath, chutneyNamespace)
 	_, err := utils.Run(exec.Command("kubectl", "-n", chutneyOperatorNS,
 		"patch", "deployment", chutneyOperatorDeploy,
 		"--type=json", "-p", argsPatch))

@@ -39,6 +39,7 @@ func BuildNetworkPolicy(
 	gw *gwv1.Gateway,
 	backends []ResolvedBackend,
 	clusterPodCIDRs []string,
+	testingNetworkNamespace string,
 	scheme *runtime.Scheme,
 ) (*netv1.NetworkPolicy, error) {
 	for _, b := range backends {
@@ -63,6 +64,9 @@ func BuildNetworkPolicy(
 	})
 	for _, b := range sorted {
 		egress = append(egress, backendEgress(b))
+	}
+	if testingNetworkNamespace != "" {
+		egress = append(egress, testingNetworkEgress(testingNetworkNamespace))
 	}
 	egress = append(egress, publicInternetEgress(clusterPodCIDRs))
 
@@ -125,6 +129,19 @@ func publicInternetEgress(clusterPodCIDRs []string) netv1.NetworkPolicyEgressRul
 	}
 	return netv1.NetworkPolicyEgressRule{
 		To: []netv1.NetworkPolicyPeer{{IPBlock: block}},
+	}
+}
+
+// testingNetworkEgress allows all pods in the chutney namespace. Egress to
+// the chutney directory authorities is required for Tor to bootstrap in
+// e2e; production never enables this.
+func testingNetworkEgress(namespace string) netv1.NetworkPolicyEgressRule {
+	return netv1.NetworkPolicyEgressRule{
+		To: []netv1.NetworkPolicyPeer{{
+			NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+				"kubernetes.io/metadata.name": namespace,
+			}},
+		}},
 	}
 }
 

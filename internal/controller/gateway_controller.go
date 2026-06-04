@@ -60,6 +60,13 @@ type GatewayReconciler struct {
 	// block. Read from --testing-tor-network-file at operator startup.
 	// Empty in production; only the e2e harness sets it.
 	TestingNetworkInclude string
+	// TestingNetworkNamespace, when non-empty, is the namespace of the
+	// in-cluster private testing-tor-network (e.g. the chutney pod). The
+	// per-Gateway NetworkPolicy gains an egress rule allowing all pods in
+	// that namespace so Tor can reach the chutney authorities without
+	// loosening the wider `0.0.0.0/0 except clusterPodCIDRs` isolation.
+	// Empty in production; only the e2e harness sets it.
+	TestingNetworkNamespace string
 }
 
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch;update;patch
@@ -561,17 +568,12 @@ func (r *GatewayReconciler) ensureNetworkPolicy(
 	if err != nil {
 		return err
 	}
-	// In testing mode, drop the clusterPodCIDRs exclusion from the
-	// public-internet egress rule so Tor pods can reach the in-cluster
-	// private testing network (e.g. a chutney pod's IP). Without this,
-	// the NP's `0.0.0.0/0 except clusterPodCIDRs` rule blocks Tor's
-	// connections to chutney's authority/relay nodes — Tor brings up its
-	// SOCKS port but can't resolve any descriptor.
-	clusterPodCIDRs := r.ClusterPodCIDRs
-	if r.TestingNetworkInclude != "" {
-		clusterPodCIDRs = nil
-	}
-	desired, err := BuildNetworkPolicy(gw, backends, clusterPodCIDRs, r.Scheme)
+	// In testing mode, BuildNetworkPolicy appends an extra egress rule
+	// allowing all pods in r.TestingNetworkNamespace so Tor can reach the
+	// chutney authorities. Keep the wider `0.0.0.0/0 except
+	// clusterPodCIDRs` block in place so cluster-pod isolation is
+	// preserved for everything else.
+	desired, err := BuildNetworkPolicy(gw, backends, r.ClusterPodCIDRs, r.TestingNetworkNamespace, r.Scheme)
 	if err != nil {
 		return err
 	}

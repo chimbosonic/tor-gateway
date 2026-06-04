@@ -127,6 +127,13 @@ func main() {
 			"torrc, along with TestingTorNetwork 1 and ClientUseIPv6 0. "+
 			"Test-only — never set in production.")
 
+	var testingTorNetworkNamespace string
+	flag.StringVar(&testingTorNetworkNamespace, "testing-tor-network-namespace", "",
+		"if set, the per-Gateway NetworkPolicy gains an egress rule allowing "+
+			"all pods in this namespace (where the chutney pod runs). Required "+
+			"when --testing-tor-network-file is set so Tor can reach the "+
+			"chutney authorities. Test-only — never set in production.")
+
 	opts := zap.Options{
 		Development: true,
 	}
@@ -274,6 +281,7 @@ func main() {
 		TorPodNetworkPolicyEnabled: torPodNetworkPolicyEnabled,
 		ClusterPodCIDRs:            clusterPodCIDRs,
 		TestingNetworkInclude:      testingTorNetworkInclude,
+		TestingNetworkNamespace:    testingTorNetworkNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "gateway")
 		os.Exit(1)
