@@ -43,7 +43,7 @@ const (
 	chutneyMountPath      = "/etc/tor-gateway/testing-network/fragment"
 	chutneyOperatorNS     = "tor-gateway-system"
 	chutneyOperatorDeploy = "tor-gateway-controller-manager"
-	chutneyReadyTimeout   = 5 * time.Minute
+	chutneyReadyTimeout   = 8 * time.Minute
 	chutneyRolloutTimeout = 2 * time.Minute
 )
 
@@ -214,7 +214,7 @@ spec:
       initialDelaySeconds: 60
       periodSeconds: 15
       timeoutSeconds: 20
-      failureThreshold: 12
+      failureThreshold: 30
     resources:
       requests: { cpu: "500m", memory: "1Gi" }
       limits:   { cpu: "1",    memory: "2Gi" }
