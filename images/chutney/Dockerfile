@@ -5,12 +5,12 @@
 # checkout. Fixed UID 65532; the entrypoint writes only into
 # CHUTNEY_DATA_DIR (an emptyDir at runtime).
 FROM debian:bookworm-slim AS build
-ARG CHUTNEY_REF=main
+ARG CHUTNEY_REF=62b54a55215c94eb14adc22c5acd17b2ada04b76
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
- && git clone --depth 1 --branch ${CHUTNEY_REF} \
-      https://github.com/torproject/chutney /chutney
+ && git clone https://github.com/torproject/chutney /chutney \
+ && cd /chutney && git checkout ${CHUTNEY_REF}
 
 FROM debian:bookworm-slim
 LABEL org.opencontainers.image.source="https://github.com/chimbosonic/tor-gateway"
