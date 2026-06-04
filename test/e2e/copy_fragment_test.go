@@ -5,6 +5,7 @@ package e2e
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -22,6 +23,9 @@ import (
 // path does not use the chutney fragment.
 func copyChutneyFragmentTo(ns string) {
 	GinkgoHelper()
+	if os.Getenv("TOR_GATEWAY_E2E_MODE") == "realtor" {
+		return
+	}
 	cmd := fmt.Sprintf(
 		"kubectl get configmap -n %s %s -o yaml "+
 			"| sed -e 's/namespace: .*/namespace: %s/' -e '/resourceVersion:/d' -e '/uid:/d' -e '/creationTimestamp:/d' "+
