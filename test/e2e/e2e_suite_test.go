@@ -67,9 +67,19 @@ var _ = BeforeSuite(func() {
 	configureKubectlKubeRC()
 	setupCertManager()
 	deployOperator()
+
+	By("deploying chutney unless TOR_GATEWAY_E2E_MODE=realtor")
+	if os.Getenv("TOR_GATEWAY_E2E_MODE") != "realtor" {
+		DeployChutneyAndExtractFragment()
+	}
 })
 
 var _ = AfterSuite(func() {
+	By("tearing down chutney unless TOR_GATEWAY_E2E_MODE=realtor")
+	if os.Getenv("TOR_GATEWAY_E2E_MODE") != "realtor" {
+		TeardownChutney()
+	}
+
 	teardownOperator()
 	teardownCertManager()
 })
