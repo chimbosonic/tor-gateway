@@ -19,6 +19,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -408,6 +409,35 @@ var _ = Describe("Gateway reconciler", func() {
 			Expect(out.Status.Addresses).To(HaveLen(1))
 			Expect(strings.HasSuffix(out.Status.Addresses[0].Value, ".onion")).To(BeTrue())
 			assertGwConditionTrue(out, gwv1.GatewayConditionProgrammed)
+		})
+
+		It("provisions router SA/Role/RoleBinding for backend pods when starting in Mode B", func() {
+			gw := makeGateway("ha-fresh", ns, "tor-gateway-test")
+			masterSec := makeValidMasterSecret("ha-fresh-master")
+
+			obp := &policyv1alpha1.OnionBalancePolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "ha-fresh-obp", Namespace: ns},
+				Spec: policyv1alpha1.OnionBalancePolicySpec{
+					TargetRefs: []gwv1.LocalPolicyTargetReference{{
+						Group: "gateway.networking.k8s.io",
+						Kind:  "Gateway",
+						Name:  gwv1.ObjectName(gw.Name),
+					}},
+					Replicas:           1,
+					MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: masterSec.Name},
+				},
+			}
+			Expect(k8sClient.Create(ctx, obp)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, obp) })
+
+			reconcileOBP(obp.Name)
+			reconcileGW(gw.Name, gw.Namespace)
+
+			rbacName := RouterRBACName(gw.Name)
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rbacName, Namespace: ns}, &corev1.ServiceAccount{})).To(Succeed(),
+				"backend StatefulSet references the router SA; ensureModeB must provision it")
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rbacName, Namespace: ns}, &rbacv1.Role{})).To(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: rbacName, Namespace: ns}, &rbacv1.RoleBinding{})).To(Succeed())
 		})
 
 		It("sets Programmed=False/PolicyNotAccepted when OBP is not Accepted", func() {

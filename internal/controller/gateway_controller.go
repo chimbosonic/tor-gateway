@@ -672,6 +672,20 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 		return fmt.Errorf("backend torrc ConfigMap: %w", err)
 	}
 
+	// Backend pods run the same router sidecar as Mode A and reference the
+	// same per-Gateway router SA/Role/RoleBinding. Mode A's reconcile path
+	// creates them; in a fresh Mode B namespace they don't exist yet, so
+	// ensure them here too. CreateOrUpdate is idempotent in either case.
+	if err := r.ensureServiceAccount(ctx, gw); err != nil {
+		return fmt.Errorf("router ServiceAccount: %w", err)
+	}
+	if err := r.ensureRole(ctx, gw); err != nil {
+		return fmt.Errorf("router Role: %w", err)
+	}
+	if err := r.ensureRoleBinding(ctx, gw); err != nil {
+		return fmt.Errorf("router RoleBinding: %w", err)
+	}
+
 	ss, err := BuildBackendStatefulSet(gw, pol, master, r.Images, r.Scheme)
 	if err != nil {
 		return err
