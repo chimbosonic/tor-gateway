@@ -554,7 +554,17 @@ func (r *GatewayReconciler) ensureNetworkPolicy(
 	if err != nil {
 		return err
 	}
-	desired, err := BuildNetworkPolicy(gw, backends, r.ClusterPodCIDRs, r.Scheme)
+	// In testing mode, drop the clusterPodCIDRs exclusion from the
+	// public-internet egress rule so Tor pods can reach the in-cluster
+	// private testing network (e.g. a chutney pod's IP). Without this,
+	// the NP's `0.0.0.0/0 except clusterPodCIDRs` rule blocks Tor's
+	// connections to chutney's authority/relay nodes — Tor brings up its
+	// SOCKS port but can't resolve any descriptor.
+	clusterPodCIDRs := r.ClusterPodCIDRs
+	if r.TestingNetworkInclude != "" {
+		clusterPodCIDRs = nil
+	}
+	desired, err := BuildNetworkPolicy(gw, backends, clusterPodCIDRs, r.Scheme)
 	if err != nil {
 		return err
 	}
