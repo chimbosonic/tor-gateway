@@ -120,6 +120,16 @@ serviceAccount:
 rbac:
   create: true
 
+# TEST ONLY. Do not enable in production: a Gateway provisioned while
+# this is enabled will publish .onion addresses that only the test
+# chutney network can resolve. They will NOT be reachable from the
+# public Tor network.
+testingTorNetwork:
+  enabled: false
+  # ConfigMap (must exist in the release namespace) whose data["fragment"]
+  # field contains the TestingTorNetwork 1 + DirAuthority block.
+  configMapName: ""
+
 # Pod-level extras (annotations, labels, priority class).
 podAnnotations: {}
 podLabels: {}

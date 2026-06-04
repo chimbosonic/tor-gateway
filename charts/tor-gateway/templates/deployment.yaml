@@ -42,6 +42,9 @@ spec:
             {{- with .Values.torPodNetworkPolicy.clusterPodCIDRs }}
             - --cluster-pod-cidrs={{ join "," . }}
             {{- end }}
+            {{- if .Values.testingTorNetwork.enabled }}
+            - --testing-tor-network-file=/etc/tor-gateway/testing-network/fragment
+            {{- end }}
           ports:
             - name: health
               containerPort: {{ .Values.manager.health.port }}
@@ -63,6 +66,19 @@ spec:
             periodSeconds: 10
           resources: {{- toYaml .Values.manager.resources | nindent 12 }}
           securityContext: {{- toYaml .Values.manager.containerSecurityContext | nindent 12 }}
+          {{- if .Values.testingTorNetwork.enabled }}
+          volumeMounts:
+            - name: testing-network
+              mountPath: /etc/tor-gateway/testing-network/fragment
+              subPath: fragment
+              readOnly: true
+          {{- end }}
+      {{- if .Values.testingTorNetwork.enabled }}
+      volumes:
+        - name: testing-network
+          configMap:
+            name: {{ .Values.testingTorNetwork.configMapName | required ".Values.testingTorNetwork.configMapName must be set when .Values.testingTorNetwork.enabled is true" }}
+      {{- end }}
       {{- with .Values.manager.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}
