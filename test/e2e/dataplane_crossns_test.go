@@ -71,6 +71,10 @@ spec:
 		buildAndLoadImage("image-tor", "ghcr.io/chimbosonic/tor:0.4.9")
 		_, _ = utils.Run(exec.Command("kubectl", "create", "ns", gwNS))
 		_, _ = utils.Run(exec.Command("kubectl", "create", "ns", backendNS))
+
+		By("copying the chutney fragment into the gateway namespace")
+		copyChutneyFragmentTo(gwNS)
+
 		applyYAML(fmt.Sprintf(`
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
@@ -116,32 +120,14 @@ spec:
 		}, "60s", "2s").Should(MatchRegexp(`^[a-z2-7]{56}\.onion$`))
 
 		By("deploying the in-cluster Tor SOCKS client")
-		applyYAML(fmt.Sprintf(`
-apiVersion: v1
-kind: Pod
-metadata: { name: tor-client, namespace: %[1]s }
-spec:
-  restartPolicy: Never
-  securityContext: { fsGroup: 65532 }
-  containers:
-  - name: tor
-    image: ghcr.io/chimbosonic/tor:0.4.9
-    imagePullPolicy: IfNotPresent
-    args: ["--SocksPort", "127.0.0.1:9050", "--DataDirectory", "/var/lib/tor/data/data", "--Log", "notice stdout"]
-    securityContext: { runAsUser: 65532, runAsGroup: 65532 }
-    volumeMounts: [{ name: data, mountPath: /var/lib/tor/data }]
-  - name: curl
-    image: curlimages/curl:8.11.1
-    command: ["sleep", "infinity"]
-  volumes: [{ name: data, emptyDir: {} }]
-`, gwNS))
+		applyYAML(chutneyTorClientPodYAML(gwNS, "tor-client"))
 
 		By("waiting for the Tor client pod to be Ready")
 		_, _ = utils.Run(exec.Command("kubectl", "-n", gwNS, "wait", "--for=condition=Ready",
 			"pod/tor-client", "--timeout=120s"))
 
 		By("control path /local routes (proves the circuit is live)")
-		Eventually(fetchOverTor("/local"), "8m", "15s").Should(Equal("local"))
+		Eventually(fetchOverTor("/local"), "2m", "5s").Should(Equal("local"))
 
 		By("ungated /remote does NOT route (cross-ns denied)")
 		Consistently(fetchOverTor("/remote"), "30s", "10s").ShouldNot(Equal("remote"))
@@ -157,6 +143,6 @@ spec:
 `, backendNS, gwNS))
 
 		By("/remote now routes")
-		Eventually(fetchOverTor("/remote"), "2m", "10s").Should(Equal("remote"))
+		Eventually(fetchOverTor("/remote"), "2m", "5s").Should(Equal("remote"))
 	})
 })

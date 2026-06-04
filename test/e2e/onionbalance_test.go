@@ -11,14 +11,11 @@ You may obtain a copy of the License at
     http://www.apache.org/licenses/LICENSE-2.0
 */
 
-// Real-Tor HA e2e: deploys a Gateway + OnionBalancePolicy (3 backends) +
-// two-backend HTTPRoute fan-out, then fetches the master .onion over the
-// public Tor network through an in-cluster Tor SOCKS client and verifies
-// that the service survives a pod kill and a replica scale-down.
-//
-// This test is inherently slow: onionbalance descriptor propagation can take
-// up to ~15 min on the public Tor network. Re-run on failure; intermittent
-// network flakes are expected.
+// HA e2e: deploys a Gateway + OnionBalancePolicy (3 backends) + two-backend
+// HTTPRoute fan-out, then fetches the master .onion through an in-cluster Tor
+// SOCKS client and verifies that the service survives a pod kill and a replica
+// scale-down. Uses the in-cluster chutney Tor network so descriptor propagation
+// is fast (~30–60 s rather than 5–15 min on the public network).
 
 package e2e
 
@@ -82,6 +79,9 @@ var _ = Describe("OnionBalance HA (Mode B)", Ordered, Label("onionbalance"), fun
 
 		By("creating the HA test namespace")
 		runOrSkipExisting("kubectl", "create", "ns", obpNS)
+
+		By("copying the chutney fragment into the HA namespace")
+		copyChutneyFragmentTo(obpNS)
 
 		By("installing the tor-gateway GatewayClass for HA tests")
 		applyYAML(fmt.Sprintf(`
@@ -218,26 +218,7 @@ spec:
 			"Gateway should publish the pre-seeded master .onion address")
 
 		By("deploying an in-cluster Tor SOCKS client for fetching the .onion")
-		applyYAML(fmt.Sprintf(`
-apiVersion: v1
-kind: Pod
-metadata: { name: ha-tor-client, namespace: %[1]s }
-spec:
-  restartPolicy: Never
-  securityContext: { fsGroup: 65532 }
-  containers:
-  - name: tor
-    image: ghcr.io/chimbosonic/tor:0.4.9
-    imagePullPolicy: IfNotPresent
-    args: ["--SocksPort", "127.0.0.1:9050", "--DataDirectory", "/var/lib/tor/data/data", "--Log", "notice stdout"]
-    securityContext: { runAsUser: 65532, runAsGroup: 65532 }
-    volumeMounts: [{ name: data, mountPath: /var/lib/tor/data }]
-  - name: curl
-    image: curlimages/curl:8.11.1
-    command: ["sleep", "infinity"]
-  volumes:
-  - { name: data, emptyDir: {} }
-`, obpNS))
+		applyYAML(chutneyTorClientPodYAML(obpNS, "ha-tor-client"))
 
 		_, err = utils.Run(exec.Command("kubectl", "-n", obpNS,
 			"wait", "--for=condition=Ready", "pod/ha-tor-client", "--timeout=120s"))
@@ -251,16 +232,12 @@ spec:
 	})
 
 	It("routes by path to the correct backend over the master .onion", func() {
-		// Allow up to 15 min for the onionbalance superdescriptor to be
-		// published and resolved by the in-cluster Tor client. Shorter
-		// poll interval than the dataplane test: descriptor merges happen
-		// after all 3 backends publish, not just the one Tor instance.
 		By("fetching / over Tor via onionbalance -> backend-A (waits for HS descriptor propagation)")
-		Eventually(fetchOverTor("ha-tor-client", "/"), "15m", "15s").
+		Eventually(fetchOverTor("ha-tor-client", "/"), "2m", "5s").
 			Should(Equal("backend-A"), "/ should route to backend-A via the master .onion")
 
 		By("fetching /api over Tor via onionbalance -> backend-B")
-		Eventually(fetchOverTor("ha-tor-client", "/api"), "2m", "10s").
+		Eventually(fetchOverTor("ha-tor-client", "/api"), "2m", "5s").
 			Should(Equal("backend-B"), "/api should route to backend-B via the master .onion")
 	})
 
@@ -276,7 +253,7 @@ spec:
 		Expect(err).NotTo(HaveOccurred(), "delete backend pod %s", podName)
 
 		By("verifying the master .onion still serves / after pod kill")
-		Eventually(fetchOverTor("ha-tor-client", "/"), "2m", "10s").
+		Eventually(fetchOverTor("ha-tor-client", "/"), "1m", "5s").
 			Should(Equal("backend-A"), "service should remain up after one pod kill")
 	})
 
@@ -293,15 +270,7 @@ spec:
 		}, "3m", "5s").Should(Equal("1"), "StatefulSet should scale down to 1 ready replica")
 
 		By("verifying the master .onion still serves / after scale-down")
-		// Bumped to 15m to match the initial-fetch timeout: after a
-		// scale-down, the published superdescriptor still advertises
-		// intro points belonging to the now-deleted backend pods. Tor
-		// clients pick intro points at random, so requests routed to
-		// the dead instances time out. Onionbalance refreshes the
-		// descriptor on its own cycle (FETCH_DESCRIPTOR_FREQUENCY=10m,
-		// PUBLISH_DESCRIPTOR_CHECK_FREQUENCY=5m); until then the test
-		// has to tolerate a noisy descriptor pool.
-		Eventually(fetchOverTor("ha-tor-client", "/"), "15m", "15s").
+		Eventually(fetchOverTor("ha-tor-client", "/"), "3m", "10s").
 			Should(Equal("backend-A"), "service should remain up after scale to 1 replica")
 	})
 })

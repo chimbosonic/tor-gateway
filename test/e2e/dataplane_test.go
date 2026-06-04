@@ -11,16 +11,18 @@ You may obtain a copy of the License at
     http://www.apache.org/licenses/LICENSE-2.0
 */
 
-// Real-Tor data-plane e2e: deploys a Gateway + two-backend HTTPRoute, then
-// fetches the published .onion over the public Tor network through an
-// in-cluster Tor SOCKS client and asserts path-based routing. Tor bootstrap
-// and hidden-service descriptor publish/lookup are slow and occasionally
-// flaky against the public network; on failure, re-run.
+// Data-plane e2e: deploys a Gateway + two-backend HTTPRoute, then fetches the
+// published .onion through an in-cluster Tor SOCKS client and asserts
+// path-based routing. In chutney mode the test uses the in-cluster testing
+// Tor network so descriptor publish is fast (~30–60 s). In realtor mode the
+// test targets the public Tor network and is gated by the "realtor-smoke"
+// label.
 
 package e2e
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -42,6 +44,8 @@ func buildAndLoadImage(makeTarget, imageRef string) {
 }
 
 var _ = Describe("Tor data plane", Ordered, Label("dataplane"), func() {
+	var onion string
+
 	BeforeAll(func() {
 		By("building and loading the per-Gateway pod images")
 		// Tags must match the operator's --router-image / --tor-init-image /
@@ -53,6 +57,9 @@ var _ = Describe("Tor data plane", Ordered, Label("dataplane"), func() {
 
 		By("creating the data-plane namespace")
 		runOrSkipExisting("kubectl", "create", "ns", dataplaneNS)
+
+		By("copying the chutney fragment into the test namespace")
+		copyChutneyFragmentTo(dataplaneNS)
 
 		By("installing the tor-gateway GatewayClass")
 		applyYAML(`
@@ -125,7 +132,11 @@ spec:
 		_, _ = utils.Run(exec.Command("kubectl", "delete", "gatewayclass", "tor-gateway", "--ignore-not-found"))
 	})
 
-	It("routes by path to the right backend over the published .onion", func() {
+	// shared setup: create Gateway + HTTPRoute, wait for the Tor deployment,
+	// read the .onion address, deploy the tor-client pod, and build fetchOverTor.
+	// Called from each It block with the appropriate pod YAML generator.
+	setupDataplaneRoute := func(torClientYAML string) func(path string) func() string {
+		GinkgoHelper()
 		By("creating the Gateway and a two-rule HTTPRoute")
 		applyYAML(fmt.Sprintf(`
 apiVersion: gateway.networking.k8s.io/v1
@@ -155,7 +166,6 @@ spec:
 		}, "3m", "5s").Should(Equal("True"), "Tor pod never became Available")
 
 		By("reading the published .onion from Gateway status")
-		var onion string
 		Eventually(func() string {
 			out, _ := utils.Run(exec.Command("kubectl", "-n", dataplaneNS, "get", "gateway", "blog",
 				"-o", "jsonpath={.status.addresses[0].value}"))
@@ -164,35 +174,12 @@ spec:
 		}, "60s", "2s").Should(MatchRegexp(`^[a-z2-7]{56}\.onion$`))
 
 		By("deploying an in-cluster Tor SOCKS client + curl sidecar")
-		applyYAML(fmt.Sprintf(`
-apiVersion: v1
-kind: Pod
-metadata: { name: tor-client, namespace: %[1]s }
-spec:
-  restartPolicy: Never
-  securityContext: { fsGroup: 65532 }
-  containers:
-  - name: tor
-    image: ghcr.io/chimbosonic/tor:0.4.9
-    imagePullPolicy: IfNotPresent
-    args: ["--SocksPort", "127.0.0.1:9050", "--DataDirectory", "/var/lib/tor/data/data", "--Log", "notice stdout"]
-    securityContext: { runAsUser: 65532, runAsGroup: 65532 }
-    volumeMounts: [{ name: data, mountPath: /var/lib/tor/data }]
-  - name: curl
-    image: curlimages/curl:8.11.1
-    command: ["sleep", "infinity"]
-  volumes:
-  - { name: data, emptyDir: {} }
-`, dataplaneNS))
-		// Ready here only means the tor process started, not that it has
-		// bootstrapped onto the Tor network; the Eventually below tolerates
-		// the bootstrap + descriptor-lookup time.
+		applyYAML(torClientYAML)
 		_, err := utils.Run(exec.Command("kubectl", "-n", dataplaneNS,
 			"wait", "--for=condition=Ready", "pod/tor-client", "--timeout=120s"))
 		Expect(err).NotTo(HaveOccurred(), "tor-client pod not ready")
 
-		// fetchOverTor curls the .onion through the client's SOCKS proxy.
-		fetchOverTor := func(path string) func() string {
+		return func(path string) func() string {
 			return func() string {
 				out, _ := utils.Run(exec.Command("kubectl", "-n", dataplaneNS, "exec", "tor-client", "-c", "curl", "--",
 					"curl", "-s", "--max-time", "30", "--socks5-hostname", "127.0.0.1:9050",
@@ -200,6 +187,26 @@ spec:
 				return strings.TrimSpace(out)
 			}
 		}
+	}
+
+	It("routes by path through the published .onion (chutney)", Label("dataplane"), func() {
+		if os.Getenv("TOR_GATEWAY_E2E_MODE") == "realtor" {
+			Skip("chutney mode disabled by TOR_GATEWAY_E2E_MODE=realtor")
+		}
+		fetchOverTor := setupDataplaneRoute(chutneyTorClientPodYAML(dataplaneNS, "tor-client"))
+
+		By("fetching / over Tor -> backend-A (allows time for HS descriptor publish+lookup)")
+		Eventually(fetchOverTor("/"), "2m", "5s").Should(Equal("backend-A"))
+
+		By("fetching /api over Tor -> backend-B")
+		Eventually(fetchOverTor("/api"), "2m", "5s").Should(Equal("backend-B"))
+	})
+
+	It("routes by path through the published .onion (real Tor)", Label("realtor-smoke"), func() {
+		if os.Getenv("TOR_GATEWAY_E2E_MODE") != "realtor" {
+			Skip("realtor-smoke only runs when TOR_GATEWAY_E2E_MODE=realtor")
+		}
+		fetchOverTor := setupDataplaneRoute(realtorTorClientPodYAML(dataplaneNS, "tor-client"))
 
 		By("fetching / over Tor -> backend-A (allows time for HS descriptor publish+lookup)")
 		Eventually(fetchOverTor("/"), "8m", "15s").Should(Equal("backend-A"))

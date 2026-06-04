@@ -191,7 +191,7 @@ spec:
 		}
 
 		By("authorized client reaches the service (proves circuit live AND auth passes)")
-		Eventually(fetchFrom("tor-auth", "/"), "8m", "15s").Should(Equal("hello"))
+		Eventually(fetchFrom("tor-auth", "/"), "2m", "5s").Should(Equal("hello"))
 
 		By("unauthorized client is refused (Strict enforced)")
 		Consistently(fetchFrom("tor-noauth", "/"), "30s", "10s").ShouldNot(Equal("hello"))
