@@ -233,8 +233,11 @@ spec:
 
 	It("routes by path to the correct backend over the master .onion", func() {
 		By("fetching / over Tor via onionbalance -> backend-A (waits for HS descriptor propagation)")
-		// 5m for the first descriptor publish+lookup on chutney's 3-HSDir network.
-		Eventually(fetchOverTor("ha-tor-client", "/"), "5m", "5s").
+		// 10m for the first onionbalance descriptor cycle on chutney's 3-HSDir network.
+		// HA descriptor publication has more moving parts than Mode A (3 backends
+		// each publish their own descriptors, frontend stitches the superdescriptor)
+		// so the initial budget is higher than the 5m the single-pod tests use.
+		Eventually(fetchOverTor("ha-tor-client", "/"), "10m", "5s").
 			Should(Equal("backend-A"), "/ should route to backend-A via the master .onion")
 
 		By("fetching /api over Tor via onionbalance -> backend-B")

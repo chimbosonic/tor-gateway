@@ -58,10 +58,18 @@ var _ = Describe("Client auth (Strict) over Tor", Ordered, Label("clientauth"), 
 	// because Tor refuses a ClientOnionAuthDir not owned by the tor uid, and
 	// Secret/ConfigMap volume dirs are owned by root (fsGroup only sets group).
 	torClientPod := func(name, authPrivate string) string {
-		torArgs := `"--SocksPort", "127.0.0.1:9050", "--DataDirectory", "/var/lib/tor/data/data", "--Log", "notice stdout"`
+		// We render a torrc file (not flags) so we can splice in the
+		// chutney fragment via Tor's %include directive. The chutney CM
+		// is mounted at /etc/tor-gateway/testing-network/fragment per the
+		// shared helper convention; copyChutneyFragmentTo(ns) in BeforeAll
+		// makes it available in the per-test namespace.
+		torrcBody := `SocksPort 127.0.0.1:9050
+DataDirectory /var/lib/tor/data/data
+Log notice stdout
+%include ` + chutneyMountPath
 		initSection, authMount, authVolume := "", "", ""
 		if authPrivate != "" {
-			torArgs += `, "--ClientOnionAuthDir", "/authdir/keys"`
+			torrcBody += "\nClientOnionAuthDir /authdir/keys"
 			initSection = fmt.Sprintf(`  initContainers:
   - name: authinit
     image: busybox:1.36
@@ -74,6 +82,13 @@ var _ = Describe("Client auth (Strict) over Tor", Ordered, Label("clientauth"), 
 		}
 		return fmt.Sprintf(`
 apiVersion: v1
+kind: ConfigMap
+metadata: { name: %[1]s-torrc, namespace: %[2]s }
+data:
+  torrc: |
+    %[7]s
+---
+apiVersion: v1
 kind: Pod
 metadata: { name: %[1]s, namespace: %[2]s }
 spec:
@@ -83,18 +98,23 @@ spec:
   - name: tor
     image: ghcr.io/chimbosonic/tor:0.4.9
     imagePullPolicy: IfNotPresent
-    args: [%[4]s]
+    args: ["-f", "/etc/tor/torrc"]
     securityContext: { runAsUser: 65532, runAsGroup: 65532 }
     volumeMounts:
     - { name: data, mountPath: /var/lib/tor/data }
-%[5]s
+    - { name: torrc, mountPath: /etc/tor, readOnly: true }
+    - { name: chutney, mountPath: %[8]s, subPath: %[9]s, readOnly: true }
+%[4]s
   - name: curl
     image: curlimages/curl:8.11.1
     command: ["sleep", "infinity"]
   volumes:
   - { name: data, emptyDir: {} }
-%[6]s
-`, name, ns, initSection, torArgs, authMount, authVolume)
+  - { name: torrc, configMap: { name: %[1]s-torrc } }
+  - { name: chutney, configMap: { name: %[6]s } }
+%[5]s
+`, name, ns, initSection, authMount, authVolume, chutneyConfigMapName,
+			strings.ReplaceAll(torrcBody, "\n", "\n    "), chutneyMountPath, chutneyConfigMapKey)
 	}
 
 	BeforeAll(func() {
@@ -102,6 +122,7 @@ spec:
 		buildAndLoadImage("image-tor-init", "ghcr.io/chimbosonic/tor-gateway-tor-init:dev")
 		buildAndLoadImage("image-tor", "ghcr.io/chimbosonic/tor:0.4.9")
 		_, _ = utils.Run(exec.Command("kubectl", "create", "ns", ns))
+		copyChutneyFragmentTo(ns)
 		applyYAML(fmt.Sprintf(`
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
