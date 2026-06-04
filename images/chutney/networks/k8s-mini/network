@@ -1,0 +1,11 @@
+# k8s-mini: small chutney flavor sized for an in-cluster e2e suite.
+# 3 authorities + 3 relays + 1 reference HS. The HS exists only to give
+# `./chutney verify` something to fetch as the bootstrap readiness gate;
+# the tor-gateway operator deploys all the .onion services that the
+# actual e2e tests exercise.
+Authority = Node(tag="a", authority=1, relay=1, torrc="authority.tmpl")
+Relay = Node(tag="r", relay=1, torrc="relay.tmpl")
+HS = Node(tag="h", hs=1, torrc="hs-v3.tmpl")
+
+NODES = Authority.getN(3) + Relay.getN(3) + HS.getN(1)
+ConfigureNodes(NODES)
