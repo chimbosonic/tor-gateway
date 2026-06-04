@@ -214,7 +214,7 @@ spec:
 			out, _ := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "gateway", "ha-gw",
 				"-o", "jsonpath={.status.addresses[0].value}"))
 			return strings.TrimSpace(out)
-		}, "60s", "2s").Should(Equal(masterOnion+".onion"),
+		}, "60s", "2s").Should(Equal(masterOnion),
 			"Gateway should publish the pre-seeded master .onion address")
 
 		By("deploying an in-cluster Tor SOCKS client for fetching the .onion")

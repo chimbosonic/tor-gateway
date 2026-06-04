@@ -785,15 +785,17 @@ func (r *GatewayReconciler) ensureHADeployment(ctx context.Context, want *appsv1
 }
 
 func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gateway, master tor.OnionAddress, pol *policyv1alpha1.OnionBalancePolicy) error {
-	addrType := gwv1.HostnameAddressType
+	const (
+		annLastReplicas = "torgateway.io/last-known-replicas"
+		annPowEmitted   = "torgateway.io/pow-override-emitted"
+	)
 	prev := previousOnion(gw)
-	gw.Status.Addresses = []gwv1.GatewayStatusAddress{{Type: &addrType, Value: master.String()}}
 	if prev != "" && prev != master.String() {
 		r.event(gw, corev1.EventTypeNormal, "MasterDescriptorChanged",
 			"switched to onionbalance HA — published .onion is now "+master.String())
 	}
 
-	const annLastReplicas = "torgateway.io/last-known-replicas"
+	annotationsChanged := false
 	prevReplicas, _ := strconv.Atoi(gw.Annotations[annLastReplicas])
 	if int32(prevReplicas) != pol.Spec.Replicas {
 		r.event(gw, corev1.EventTypeNormal, "BackendsRolling",
@@ -802,9 +804,8 @@ func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gate
 			gw.Annotations = map[string]string{}
 		}
 		gw.Annotations[annLastReplicas] = strconv.Itoa(int(pol.Spec.Replicas))
+		annotationsChanged = true
 	}
-
-	const annPowEmitted = "torgateway.io/pow-override-emitted"
 	if powForcedOff(ctx, r.Client, gw) && gw.Annotations[annPowEmitted] != "true" {
 		r.event(gw, corev1.EventTypeNormal, "PoWForcedOffInHA",
 			"HiddenServicePoWDefensesEnabled in TorServicePolicy is overridden to false on backends (onionbalance#13)")
@@ -812,8 +813,22 @@ func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gate
 			gw.Annotations = map[string]string{}
 		}
 		gw.Annotations[annPowEmitted] = "true"
+		annotationsChanged = true
 	}
 
+	// Persist annotations via a plain Update FIRST. With the status
+	// subresource enabled, r.Update returns the server's view of the
+	// object — which wipes any status fields we may have already set on
+	// the in-memory gw. So we must set the status fields AFTER this call,
+	// not before.
+	if annotationsChanged {
+		if err := r.Update(ctx, gw); err != nil {
+			return err
+		}
+	}
+
+	addrType := gwv1.HostnameAddressType
+	gw.Status.Addresses = []gwv1.GatewayStatusAddress{{Type: &addrType, Value: master.String()}}
 	wantConds := []metav1.Condition{
 		{
 			Type:               string(gwv1.GatewayConditionAccepted),
@@ -834,10 +849,6 @@ func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gate
 	}
 	for _, c := range wantConds {
 		setCondition(&gw.Status.Conditions, c)
-	}
-
-	if err := r.Update(ctx, gw); err != nil {
-		return err
 	}
 	return r.Status().Update(ctx, gw)
 }
