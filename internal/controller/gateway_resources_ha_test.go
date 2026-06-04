@@ -649,7 +649,7 @@ func TestBuildFrontendDeployment(t *testing.T) {
 		Tor:          "tor:v1",
 		Onionbalance: "onionbalance:v1",
 		Obrefresh:    "obrefresh:v1",
-	}, scheme)
+	}, false, scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -687,6 +687,49 @@ func TestBuildFrontendDeployment(t *testing.T) {
 	}
 	if !foundArg {
 		t.Errorf("obrefresh must receive --master-address; got args: %v", containers["obrefresh"].Args)
+	}
+}
+
+func TestBuildFrontendDeployment_IsTestnetFlag(t *testing.T) {
+	gw := sampleGateway()
+	scheme := testScheme(t)
+	pol := &policyv1alpha1.OnionBalancePolicy{
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "blog-master"},
+		},
+	}
+	master := sampleMasterAddr(t)
+	imgs := RuntimeImages{Tor: "tor:v1", Onionbalance: "ob:v1", Obrefresh: "obr:v1"}
+
+	for _, tc := range []struct {
+		name        string
+		testingMode bool
+		wantFlag    bool
+	}{
+		{"prod omits --is-testnet", false, false},
+		{"testing emits --is-testnet", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := BuildFrontendDeployment(gw, pol, master, imgs, tc.testingMode, scheme)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var obArgs []string
+			for _, c := range d.Spec.Template.Spec.Containers {
+				if c.Name == "onionbalance" {
+					obArgs = c.Args
+				}
+			}
+			has := false
+			for _, a := range obArgs {
+				if a == "--is-testnet" {
+					has = true
+				}
+			}
+			if has != tc.wantFlag {
+				t.Errorf("onionbalance args = %v; want --is-testnet=%v", obArgs, tc.wantFlag)
+			}
+		})
 	}
 }
 

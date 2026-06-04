@@ -23,6 +23,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -226,6 +227,10 @@ spec:
 	})
 
 	AfterAll(func() {
+		if os.Getenv("TOR_GATEWAY_E2E_NO_TEARDOWN") == "1" {
+			fmt.Printf("\n[debug] keeping ns %s + gatewayclass %s (TOR_GATEWAY_E2E_NO_TEARDOWN=1)\n", obpNS, obpGwClass)
+			return
+		}
 		By("removing HA test namespace and GatewayClass")
 		_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", obpNS, "--ignore-not-found", "--wait=false"))
 		_, _ = utils.Run(exec.Command("kubectl", "delete", "gatewayclass", obpGwClass, "--ignore-not-found"))
@@ -233,11 +238,10 @@ spec:
 
 	It("routes by path to the correct backend over the master .onion", func() {
 		By("fetching / over Tor via onionbalance -> backend-A (waits for HS descriptor propagation)")
-		// 10m for the first onionbalance descriptor cycle on chutney's 3-HSDir network.
-		// HA descriptor publication has more moving parts than Mode A (3 backends
-		// each publish their own descriptors, frontend stitches the superdescriptor)
-		// so the initial budget is higher than the 5m the single-pod tests use.
-		Eventually(fetchOverTor("ha-tor-client", "/"), "10m", "5s").
+		// In testing mode the operator passes --is-testnet to onionbalance,
+		// which drops its descriptor cycle to 20s fetch / 10s publish-check.
+		// 5m matches the single-pod tests' first-fetch budget.
+		Eventually(fetchOverTor("ha-tor-client", "/"), "5m", "5s").
 			Should(Equal("backend-A"), "/ should route to backend-A via the master .onion")
 
 		By("fetching /api over Tor via onionbalance -> backend-B")

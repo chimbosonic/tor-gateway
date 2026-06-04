@@ -537,10 +537,20 @@ func BuildFrontendDeployment(
 	pol *policyv1alpha1.OnionBalancePolicy,
 	master tor.OnionAddress,
 	images RuntimeImages,
+	testingMode bool,
 	scheme *runtime.Scheme,
 ) (*appsv1.Deployment, error) {
 	masterSecretName := pol.Spec.MasterKeySecretRef.Name
 	labels := HALabels(gw, haRoleFrontend)
+
+	// In testing mode, --is-testnet drops onionbalance's descriptor cycle
+	// from production timings (FETCH 600s / PUBLISH 300s / LIFETIME 3600s)
+	// down to testnet timings (20s / 10s / 20s). Without this, the first
+	// HA descriptor publish on chutney takes 5–10 min and times out e2e.
+	obArgs := []string{"-c", "/etc/onionbalance/config/config.yaml"}
+	if testingMode {
+		obArgs = append(obArgs, "--is-testnet")
+	}
 
 	// Pointer-to-literal locals; using ptr.To(true) trips modernize's
 	// newexpr rule, whose suggested rewrite to new(T) silently swaps in
@@ -579,7 +589,7 @@ func BuildFrontendDeployment(
 				{
 					Name:  "onionbalance",
 					Image: images.Onionbalance,
-					Args:  []string{"-c", "/etc/onionbalance/config/config.yaml"},
+					Args:  obArgs,
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: "ob-config", MountPath: "/etc/onionbalance/config"},
 						{Name: "ob-keys", MountPath: "/etc/onionbalance/keys", ReadOnly: true},

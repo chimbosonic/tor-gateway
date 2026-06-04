@@ -694,7 +694,7 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 		return fmt.Errorf("backend StatefulSet: %w", err)
 	}
 
-	d, err := BuildFrontendDeployment(gw, pol, master, r.Images, r.Scheme)
+	d, err := BuildFrontendDeployment(gw, pol, master, r.Images, r.TestingNetworkInclude != "", r.Scheme)
 	if err != nil {
 		return err
 	}
