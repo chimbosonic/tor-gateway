@@ -416,7 +416,7 @@ func (r *GatewayReconciler) ensureTorrcConfigMap(
 	policy EffectiveServicePolicy,
 	auth EffectiveClientAuth,
 ) (*corev1.ConfigMap, error) {
-	desired, err := BuildTorrcConfigMap(gw, policy, auth, r.Scheme)
+	desired, err := BuildTorrcConfigMap(gw, policy, auth, r.TestingNetworkIncludePath, r.Scheme)
 	if err != nil {
 		return nil, err
 	}

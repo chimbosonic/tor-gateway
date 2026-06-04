@@ -116,7 +116,7 @@ func TestBuildTorrcConfigMap_UsesPolicyValues(t *testing.T) {
 	cm, err := BuildTorrcConfigMap(gw, EffectiveServicePolicy{
 		LogLevel:           "debug",
 		PoWDefensesEnabled: false,
-	}, EffectiveClientAuth{}, scheme)
+	}, EffectiveClientAuth{}, "", scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestBuildTorrcConfigMap_UsesPolicyValues(t *testing.T) {
 func TestBuildTorrcConfigMap_DefaultPolicyEnablesPoW(t *testing.T) {
 	scheme := testScheme(t)
 	gw := sampleGateway()
-	cm, err := BuildTorrcConfigMap(gw, DefaultPolicy(), EffectiveClientAuth{}, scheme)
+	cm, err := BuildTorrcConfigMap(gw, DefaultPolicy(), EffectiveClientAuth{}, "", scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestBuildTorrcConfigMap_ClientAuthEnabled_SetsAuthDir(t *testing.T) {
 	scheme := testScheme(t)
 	gw := sampleGateway()
 	cm, err := BuildTorrcConfigMap(gw, DefaultPolicy(),
-		EffectiveClientAuth{Enabled: true, SecretName: "blog-clients"}, scheme)
+		EffectiveClientAuth{Enabled: true, SecretName: "blog-clients"}, "", scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestBuildDeployment_ClientAuth_AddsVolumeMountAndFlag(t *testing.T) {
 }
 
 func TestBuildTorrc_DirsAreProcessOwnedSubdirs(t *testing.T) {
-	cm, err := BuildTorrcConfigMap(sampleGateway(), DefaultPolicy(), EffectiveClientAuth{}, testScheme(t))
+	cm, err := BuildTorrcConfigMap(sampleGateway(), DefaultPolicy(), EffectiveClientAuth{}, "", testScheme(t))
 	if err != nil {
 		t.Fatalf("BuildTorrcConfigMap: %v", err)
 	}
@@ -607,7 +607,7 @@ func TestBuildDeployment_TorHasMetricsPortAndProbes(t *testing.T) {
 
 func TestBuildTorrcConfigMap_SetsMetricsPort(t *testing.T) {
 	gw := sampleGateway()
-	cm, err := BuildTorrcConfigMap(gw, DefaultPolicy(), EffectiveClientAuth{}, testScheme(t))
+	cm, err := BuildTorrcConfigMap(gw, DefaultPolicy(), EffectiveClientAuth{}, "", testScheme(t))
 	if err != nil {
 		t.Fatalf("BuildTorrcConfigMap: %v", err)
 	}
@@ -615,6 +615,48 @@ func TestBuildTorrcConfigMap_SetsMetricsPort(t *testing.T) {
 	for _, want := range []string{"MetricsPort 0.0.0.0:9035", "MetricsPortPolicy accept 0.0.0.0/0"} {
 		if !strings.Contains(torrc, want) {
 			t.Errorf("torrc missing %q\n--- torrc ---\n%s", want, torrc)
+		}
+	}
+}
+
+func TestBuildTorrcConfigMap_PropagatesTestingNetworkIncludePath(t *testing.T) {
+	gw := sampleGateway()
+	const path = "/etc/tor-gateway/testing-network/fragment"
+	cm, err := BuildTorrcConfigMap(
+		gw,
+		EffectiveServicePolicy{LogLevel: "notice"},
+		EffectiveClientAuth{},
+		path,
+		testScheme(t),
+	)
+	if err != nil {
+		t.Fatalf("BuildTorrcConfigMap: %v", err)
+	}
+	rendered := cm.Data["torrc"]
+	if !strings.Contains(rendered, "%include "+path) {
+		t.Errorf("rendered torrc missing %%include of %q:\n%s", path, rendered)
+	}
+	if !strings.Contains(rendered, "TestingTorNetwork 1") {
+		t.Errorf("rendered torrc missing TestingTorNetwork 1:\n%s", rendered)
+	}
+}
+
+func TestBuildTorrcConfigMap_EmptyPathEmitsNoTestingBlock(t *testing.T) {
+	gw := sampleGateway()
+	cm, err := BuildTorrcConfigMap(
+		gw,
+		EffectiveServicePolicy{LogLevel: "notice"},
+		EffectiveClientAuth{},
+		"",
+		testScheme(t),
+	)
+	if err != nil {
+		t.Fatalf("BuildTorrcConfigMap: %v", err)
+	}
+	rendered := cm.Data["torrc"]
+	for _, denied := range []string{"TestingTorNetwork", "%include", "ClientUseIPv6 0"} {
+		if strings.Contains(rendered, denied) {
+			t.Errorf("production render must not contain %q; got:\n%s", denied, rendered)
 		}
 	}
 }
