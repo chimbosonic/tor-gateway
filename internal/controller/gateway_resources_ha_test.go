@@ -656,7 +656,7 @@ func TestBuildBackendTorrcConfigMap(t *testing.T) {
 	cm, err := BuildBackendTorrcConfigMap(gw, pol, EffectiveServicePolicy{
 		LogLevel:           "notice",
 		PoWDefensesEnabled: true,
-	}, EffectiveClientAuth{}, scheme)
+	}, EffectiveClientAuth{}, "", scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -671,5 +671,33 @@ func TestBuildBackendTorrcConfigMap(t *testing.T) {
 	}
 	if cm.Name != "blog-backend-torrc" {
 		t.Errorf("name: %s", cm.Name)
+	}
+}
+
+func TestBuildBackendTorrcConfigMap_PropagatesTestingNetworkIncludePath(t *testing.T) {
+	gw := sampleGateway()
+	scheme := testScheme(t)
+	pol := samplePolicy(2)
+	const path = "/etc/tor-gateway/testing-network/fragment"
+	cm, err := BuildBackendTorrcConfigMap(
+		gw, pol,
+		EffectiveServicePolicy{LogLevel: "notice"},
+		EffectiveClientAuth{},
+		path,
+		scheme,
+	)
+	if err != nil {
+		t.Fatalf("BuildBackendTorrcConfigMap: %v", err)
+	}
+	rendered := cm.Data["torrc"]
+	if !strings.Contains(rendered, "%include "+path) {
+		t.Errorf("rendered backend torrc missing %%include of %q:\n%s", path, rendered)
+	}
+	if !strings.Contains(rendered, "TestingTorNetwork 1") {
+		t.Errorf("rendered backend torrc missing TestingTorNetwork 1:\n%s", rendered)
+	}
+	// Backend torrc MUST still contain the onionbalance instance directive.
+	if !strings.Contains(rendered, "HiddenServiceOnionbalanceInstance 1") {
+		t.Errorf("backend torrc lost HiddenServiceOnionbalanceInstance 1:\n%s", rendered)
 	}
 }

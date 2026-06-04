@@ -304,19 +304,24 @@ func BackendTorrcConfigMapName(gw *gwv1.Gateway) string {
 // Identical to Mode A's torrc but with OnionbalanceInstance=true (which
 // emits HiddenServiceOnionbalanceInstance 1 and unconditionally omits
 // the PoW directives — see onionbalance#13).
+// testingNetworkIncludePath, when non-empty, is forwarded to TorrcConfig so
+// the renderer emits TestingTorNetwork 1 and a %include directive; pass ""
+// for production deployments.
 func BuildBackendTorrcConfigMap(
 	gw *gwv1.Gateway,
 	pol *policyv1alpha1.OnionBalancePolicy,
 	eff EffectiveServicePolicy,
 	auth EffectiveClientAuth,
+	testingNetworkIncludePath string,
 	scheme *runtime.Scheme,
 ) (*corev1.ConfigMap, error) {
 	cfg := &tor.TorrcConfig{
-		HiddenServiceDir:     hsServiceDir,
-		DataDirectory:        torDataDir,
-		LogLevel:             eff.LogLevel,
-		PoWDefensesEnabled:   eff.PoWDefensesEnabled,
-		OnionbalanceInstance: true,
+		HiddenServiceDir:          hsServiceDir,
+		DataDirectory:             torDataDir,
+		LogLevel:                  eff.LogLevel,
+		PoWDefensesEnabled:        eff.PoWDefensesEnabled,
+		OnionbalanceInstance:      true,
+		TestingNetworkIncludePath: testingNetworkIncludePath,
 		HiddenServicePort: tor.PortMapping{
 			VirtualPort: 80,
 			TargetHost:  loopbackTargetHost,

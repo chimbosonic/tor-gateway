@@ -654,7 +654,7 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 	if err != nil {
 		return fmt.Errorf("find effective client auth for backend torrc: %w", err)
 	}
-	backendTorrc, err := BuildBackendTorrcConfigMap(gw, pol, backendPolicy, backendAuth, r.Scheme)
+	backendTorrc, err := BuildBackendTorrcConfigMap(gw, pol, backendPolicy, backendAuth, r.TestingNetworkIncludePath, r.Scheme)
 	if err != nil {
 		return err
 	}
