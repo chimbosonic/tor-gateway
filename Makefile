@@ -151,12 +151,13 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 # Gateway API CRDs and conformance targets.
 # Both pull from the gateway-api Go module cache so the version stays in
 # lockstep with go.mod (no separate version-tracking surface).
-GATEWAY_API_DIR ?= $(shell go list -m -f '{{.Dir}}' sigs.k8s.io/gateway-api)
-GATEWAY_API_CRDS_DIR ?= $(GATEWAY_API_DIR)/config/crd/standard
-
 .PHONY: install-gateway-api-crds
 install-gateway-api-crds: ## Apply gateway-api standard-channel CRDs to the current kube context.
-	$(KUBECTL) apply -f $(GATEWAY_API_CRDS_DIR)
+	# Resolve the gateway-api module dir at recipe time so a cold module
+	# cache (e.g. fresh CI runner) gets the module downloaded first.
+	# Parse-time $(shell go list -m ...) silently returns "" if uncached.
+	@go mod download sigs.k8s.io/gateway-api
+	$(KUBECTL) apply -f "$$(go list -m -f '{{.Dir}}' sigs.k8s.io/gateway-api)/config/crd/standard"
 
 .PHONY: test-conformance
 test-conformance: setup-test-e2e manifests generate fmt vet ## Verify the deployed operator satisfies the Gateway API status contract (Kind).
