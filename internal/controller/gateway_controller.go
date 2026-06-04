@@ -589,6 +589,9 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 			return fmt.Errorf("backend Secret %d: %w", i, err)
 		}
 	}
+	if err := r.gcOrphanBackendSecrets(ctx, gw, pol.Spec.Replicas); err != nil {
+		return err
+	}
 
 	svc, err := BuildBackendHeadlessService(gw, r.Scheme)
 	if err != nil {
@@ -858,6 +861,49 @@ func previousOnion(gw *gwv1.Gateway) string {
 		return ""
 	}
 	return gw.Status.Addresses[0].Value
+}
+
+// gcOrphanBackendSecrets deletes per-pod backend Secrets whose index is
+// now >= replicas. On scale-down the obrefresh informer would otherwise
+// keep seeing the stale Secrets, the rendered onionbalance config would
+// keep listing the dead instances, and the published superdescriptor
+// would advertise intro points for pods that no longer exist.
+func (r *GatewayReconciler) gcOrphanBackendSecrets(ctx context.Context, gw *gwv1.Gateway, replicas int32) error {
+	var existing corev1.SecretList
+	if err := r.List(ctx, &existing,
+		client.InNamespace(gw.Namespace),
+		client.MatchingLabels{"torgateway.io/gateway": gw.Name, "torgateway.io/role": "backend"},
+	); err != nil {
+		return fmt.Errorf("list backend Secrets for GC: %w", err)
+	}
+	for i := range existing.Items {
+		s := &existing.Items[i]
+		idx := backendSecretIndex(s.Name, gw.Name)
+		if idx < 0 || idx < int(replicas) {
+			continue
+		}
+		if err := client.IgnoreNotFound(r.Delete(ctx, s)); err != nil {
+			return fmt.Errorf("delete orphan backend Secret %s: %w", s.Name, err)
+		}
+	}
+	return nil
+}
+
+// backendSecretIndex parses the index out of a "<gw>-backend-<N>-keys"
+// Secret name. Returns -1 if the name does not match the expected shape
+// (in which case the caller should skip it rather than treat it as N=0).
+func backendSecretIndex(secretName, gw string) int {
+	prefix := gw + "-backend-"
+	suffix := "-keys"
+	if !strings.HasPrefix(secretName, prefix) || !strings.HasSuffix(secretName, suffix) {
+		return -1
+	}
+	mid := strings.TrimSuffix(strings.TrimPrefix(secretName, prefix), suffix)
+	n, err := strconv.Atoi(mid)
+	if err != nil || n < 0 {
+		return -1
+	}
+	return n
 }
 
 func (r *GatewayReconciler) cleanupModeAResources(ctx context.Context, gw *gwv1.Gateway) error {

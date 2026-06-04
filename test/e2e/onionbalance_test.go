@@ -293,7 +293,15 @@ spec:
 		}, "3m", "5s").Should(Equal("1"), "StatefulSet should scale down to 1 ready replica")
 
 		By("verifying the master .onion still serves / after scale-down")
-		Eventually(fetchOverTor("ha-tor-client", "/"), "2m", "10s").
+		// Bumped to 15m to match the initial-fetch timeout: after a
+		// scale-down, the published superdescriptor still advertises
+		// intro points belonging to the now-deleted backend pods. Tor
+		// clients pick intro points at random, so requests routed to
+		// the dead instances time out. Onionbalance refreshes the
+		// descriptor on its own cycle (FETCH_DESCRIPTOR_FREQUENCY=10m,
+		// PUBLISH_DESCRIPTOR_CHECK_FREQUENCY=5m); until then the test
+		// has to tolerate a noisy descriptor pool.
+		Eventually(fetchOverTor("ha-tor-client", "/"), "15m", "15s").
 			Should(Equal("backend-A"), "service should remain up after scale to 1 replica")
 	})
 })
