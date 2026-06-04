@@ -43,7 +43,7 @@ const (
 	chutneyMountPath      = "/etc/tor-gateway/testing-network/fragment"
 	chutneyOperatorNS     = "tor-gateway-system"
 	chutneyOperatorDeploy = "tor-gateway-controller-manager"
-	chutneyReadyTimeout   = 3 * time.Minute
+	chutneyReadyTimeout   = 5 * time.Minute
 	chutneyRolloutTimeout = 2 * time.Minute
 )
 
@@ -107,7 +107,7 @@ func mustExtractChutneyFragment() string {
 		"exec", chutneyPodName, "--",
 		"sh", "-c",
 		"printf 'TestingTorNetwork 1\\nClientUseIPv6 0\\n'; "+
-			"grep '^DirAuthority ' /chutney/net/nodes/000c/torrc",
+			"grep '^DirAuthority ' /data/nodes/000a/torrc",
 	))
 	Expect(err).NotTo(HaveOccurred(), "kubectl exec failed extracting chutney fragment")
 	fragment := strings.TrimSpace(out)
@@ -123,28 +123,46 @@ func mustExtractChutneyFragment() string {
 
 func patchOperatorForChutney() {
 	GinkgoHelper()
-	patch := fmt.Sprintf(`[
-		{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--testing-tor-network-file=%[1]s"},
-		{"op":"add","path":"/spec/template/spec/volumes/-","value":{
-			"name":"testing-network",
-			"configMap":{"name":%[2]q}
-		}},
-		{"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{
-			"name":"testing-network",
-			"mountPath":"%[3]s",
-			"subPath":"%[4]s",
-			"readOnly":true
-		}}
-	]`,
-		chutneyMountPath,
+	// Two-step patch: JSON-patch appends to args (the array always exists in
+	// the live object); strategic-merge handles volumes + volumeMounts (those
+	// arrays are absent/null after kustomize serialisation, so JSON-patch
+	// "add" with "/-" fails on them — strategic-merge creates them on the fly).
+	argsPatch := fmt.Sprintf(`[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--testing-tor-network-file=%s"}]`,
+		chutneyMountPath)
+	_, err := utils.Run(exec.Command("kubectl", "-n", chutneyOperatorNS,
+		"patch", "deployment", chutneyOperatorDeploy,
+		"--type=json", "-p", argsPatch))
+	Expect(err).NotTo(HaveOccurred(), "operator args patch failed")
+
+	volPatch := fmt.Sprintf(`{
+		"spec":{
+			"template":{
+				"spec":{
+					"containers":[{
+						"name":"manager",
+						"volumeMounts":[{
+							"name":"testing-network",
+							"mountPath":"%[2]s",
+							"subPath":"%[3]s",
+							"readOnly":true
+						}]
+					}],
+					"volumes":[{
+						"name":"testing-network",
+						"configMap":{"name":%[1]q}
+					}]
+				}
+			}
+		}
+	}`,
 		chutneyConfigMapName,
 		chutneyMountPath,
 		chutneyConfigMapKey,
 	)
-	_, err := utils.Run(exec.Command("kubectl", "-n", chutneyOperatorNS,
+	_, err = utils.Run(exec.Command("kubectl", "-n", chutneyOperatorNS,
 		"patch", "deployment", chutneyOperatorDeploy,
-		"--type=json", "-p", patch))
-	Expect(err).NotTo(HaveOccurred(), "operator patch failed")
+		"--type=strategic", "-p", volPatch))
+	Expect(err).NotTo(HaveOccurred(), "operator volume patch failed")
 }
 
 func chutneyManifest() string {
