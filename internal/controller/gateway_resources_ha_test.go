@@ -583,11 +583,11 @@ func TestBuildFrontendTorrcConfigMap(t *testing.T) {
 	}
 }
 
-func TestBuildFrontendTorrcConfigMap_PropagatesTestingNetworkIncludePath(t *testing.T) {
+func TestBuildFrontendTorrcConfigMap_PropagatesTestingNetworkInclude(t *testing.T) {
 	gw := sampleGateway()
 	scheme := testScheme(t)
-	const path = "/etc/tor-gateway/testing-network/fragment"
-	cm, err := BuildFrontendTorrcConfigMap(gw, path, scheme) // new path arg before scheme
+	const fragment = "TestingTorNetwork 1\nClientUseIPv6 0\nDirAuthority test\n"
+	cm, err := BuildFrontendTorrcConfigMap(gw, fragment, scheme)
 	if err != nil {
 		t.Fatalf("BuildFrontendTorrcConfigMap: %v", err)
 	}
@@ -595,7 +595,7 @@ func TestBuildFrontendTorrcConfigMap_PropagatesTestingNetworkIncludePath(t *test
 	for _, required := range []string{
 		"TestingTorNetwork 1",
 		"ClientUseIPv6 0",
-		"%include " + path,
+		"DirAuthority test",
 		// Frontend torrc fundamentals MUST be preserved:
 		"ControlPort",
 		"CookieAuthentication 1",
@@ -605,12 +605,15 @@ func TestBuildFrontendTorrcConfigMap_PropagatesTestingNetworkIncludePath(t *test
 			t.Errorf("expected %q in frontend torrc:\n%s", required, rendered)
 		}
 	}
+	if strings.Contains(rendered, "%include") {
+		t.Errorf("frontend torrc must NOT contain %%include (content is inlined):\n%s", rendered)
+	}
 	if strings.Contains(rendered, "HiddenService") {
 		t.Errorf("frontend torrc must NOT contain HiddenService directives:\n%s", rendered)
 	}
 }
 
-func TestBuildFrontendTorrcConfigMap_EmptyPathEmitsNoTestingBlock(t *testing.T) {
+func TestBuildFrontendTorrcConfigMap_EmptyIncludeEmitsNoTestingBlock(t *testing.T) {
 	gw := sampleGateway()
 	scheme := testScheme(t)
 	cm, err := BuildFrontendTorrcConfigMap(gw, "", scheme)
@@ -722,27 +725,33 @@ func TestBuildBackendTorrcConfigMap(t *testing.T) {
 	}
 }
 
-func TestBuildBackendTorrcConfigMap_PropagatesTestingNetworkIncludePath(t *testing.T) {
+func TestBuildBackendTorrcConfigMap_PropagatesTestingNetworkInclude(t *testing.T) {
 	gw := sampleGateway()
 	scheme := testScheme(t)
 	pol := samplePolicy(2)
-	const path = "/etc/tor-gateway/testing-network/fragment"
+	const fragment = "TestingTorNetwork 1\nClientUseIPv6 0\nDirAuthority test\n"
 	cm, err := BuildBackendTorrcConfigMap(
 		gw, pol,
 		EffectiveServicePolicy{LogLevel: "notice"},
 		EffectiveClientAuth{},
-		path,
+		fragment,
 		scheme,
 	)
 	if err != nil {
 		t.Fatalf("BuildBackendTorrcConfigMap: %v", err)
 	}
 	rendered := cm.Data["torrc"]
-	if !strings.Contains(rendered, "%include "+path) {
-		t.Errorf("rendered backend torrc missing %%include of %q:\n%s", path, rendered)
-	}
 	if !strings.Contains(rendered, "TestingTorNetwork 1") {
 		t.Errorf("rendered backend torrc missing TestingTorNetwork 1:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "ClientUseIPv6 0") {
+		t.Errorf("rendered backend torrc missing ClientUseIPv6 0:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "DirAuthority test") {
+		t.Errorf("rendered backend torrc missing DirAuthority line:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "%include") {
+		t.Errorf("rendered backend torrc must not contain %%include (content is inlined):\n%s", rendered)
 	}
 	// Backend torrc MUST still contain the onionbalance instance directive.
 	if !strings.Contains(rendered, "HiddenServiceOnionbalanceInstance 1") {

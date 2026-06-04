@@ -619,29 +619,35 @@ func TestBuildTorrcConfigMap_SetsMetricsPort(t *testing.T) {
 	}
 }
 
-func TestBuildTorrcConfigMap_PropagatesTestingNetworkIncludePath(t *testing.T) {
+func TestBuildTorrcConfigMap_PropagatesTestingNetworkInclude(t *testing.T) {
 	gw := sampleGateway()
-	const path = "/etc/tor-gateway/testing-network/fragment"
+	const fragment = "TestingTorNetwork 1\nClientUseIPv6 0\nDirAuthority test\n"
 	cm, err := BuildTorrcConfigMap(
 		gw,
 		EffectiveServicePolicy{LogLevel: "notice"},
 		EffectiveClientAuth{},
-		path,
+		fragment,
 		testScheme(t),
 	)
 	if err != nil {
 		t.Fatalf("BuildTorrcConfigMap: %v", err)
 	}
 	rendered := cm.Data["torrc"]
-	if !strings.Contains(rendered, "%include "+path) {
-		t.Errorf("rendered torrc missing %%include of %q:\n%s", path, rendered)
-	}
 	if !strings.Contains(rendered, "TestingTorNetwork 1") {
 		t.Errorf("rendered torrc missing TestingTorNetwork 1:\n%s", rendered)
 	}
+	if !strings.Contains(rendered, "ClientUseIPv6 0") {
+		t.Errorf("rendered torrc missing ClientUseIPv6 0:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "DirAuthority test") {
+		t.Errorf("rendered torrc missing DirAuthority line:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "%include") {
+		t.Errorf("rendered torrc must not contain %%include (content is inlined):\n%s", rendered)
+	}
 }
 
-func TestBuildTorrcConfigMap_EmptyPathEmitsNoTestingBlock(t *testing.T) {
+func TestBuildTorrcConfigMap_EmptyIncludeEmitsNoTestingBlock(t *testing.T) {
 	gw := sampleGateway()
 	cm, err := BuildTorrcConfigMap(
 		gw,

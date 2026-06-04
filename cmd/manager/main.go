@@ -147,6 +147,16 @@ func main() {
 		}
 	}
 
+	var testingTorNetworkInclude string
+	if testingTorNetworkFile != "" {
+		content, err := os.ReadFile(testingTorNetworkFile)
+		if err != nil {
+			setupLog.Error(err, "read --testing-tor-network-file", "path", testingTorNetworkFile)
+			os.Exit(1)
+		}
+		testingTorNetworkInclude = string(content)
+	}
+
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
 	// prevent from being vulnerable to the HTTP/2 Stream Cancellation and
@@ -263,7 +273,7 @@ func main() {
 		APIReader:                  mgr.GetAPIReader(),
 		TorPodNetworkPolicyEnabled: torPodNetworkPolicyEnabled,
 		ClusterPodCIDRs:            clusterPodCIDRs,
-		TestingNetworkIncludePath:  testingTorNetworkFile,
+		TestingNetworkInclude:      testingTorNetworkInclude,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "gateway")
 		os.Exit(1)

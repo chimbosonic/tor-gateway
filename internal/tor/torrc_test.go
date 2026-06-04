@@ -289,7 +289,7 @@ func TestRenderNonBackendStillHonoursPoW(t *testing.T) {
 	}
 }
 
-func TestRender_TestingNetworkIncludePath_Empty(t *testing.T) {
+func TestRender_TestingNetworkInclude_Empty(t *testing.T) {
 	// When the field is empty, output MUST be byte-identical to what a
 	// production render produces — regression guard against accidentally
 	// leaking testing-mode bytes into production torrcs.
@@ -302,7 +302,7 @@ func TestRender_TestingNetworkIncludePath_Empty(t *testing.T) {
 			TargetHost:  "127.0.0.1",
 			TargetPort:  9080,
 		},
-		// TestingNetworkIncludePath intentionally unset
+		// TestingNetworkInclude intentionally unset
 	}
 	out, err := Render(&cfg)
 	if err != nil {
@@ -315,7 +315,8 @@ func TestRender_TestingNetworkIncludePath_Empty(t *testing.T) {
 	}
 }
 
-func TestRender_TestingNetworkIncludePath_Set(t *testing.T) {
+func TestRender_TestingNetworkInclude_Set(t *testing.T) {
+	const fragment = "TestingTorNetwork 1\nClientUseIPv6 0\nDirAuthority test_authority orport=5000 v3ident=AAA 127.0.0.1:7000 BBB\n"
 	cfg := TorrcConfig{
 		LogLevel:         "notice",
 		HiddenServiceDir: "/var/lib/tor/hs",
@@ -325,7 +326,7 @@ func TestRender_TestingNetworkIncludePath_Set(t *testing.T) {
 			TargetHost:  "127.0.0.1",
 			TargetPort:  9080,
 		},
-		TestingNetworkIncludePath: "/etc/tor-gateway/testing-network/fragment",
+		TestingNetworkInclude: fragment,
 	}
 	out, err := Render(&cfg)
 	if err != nil {
@@ -334,11 +335,15 @@ func TestRender_TestingNetworkIncludePath_Set(t *testing.T) {
 	for _, required := range []string{
 		"TestingTorNetwork 1",
 		"ClientUseIPv6 0",
-		"%include /etc/tor-gateway/testing-network/fragment",
+		"DirAuthority test_authority",
 	} {
 		if !strings.Contains(out, required) {
 			t.Errorf("expected %q in output:\n%s", required, out)
 		}
+	}
+	// No %include directive — content is inlined verbatim.
+	if strings.Contains(out, "%include") {
+		t.Errorf("rendered torrc must not contain %%include (content is inlined); got:\n%s", out)
 	}
 	// The testing block MUST precede the HiddenService block — Tor parses
 	// torrc top-down and TestingTorNetwork must be set before HS

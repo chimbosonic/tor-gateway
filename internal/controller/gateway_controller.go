@@ -55,11 +55,11 @@ type GatewayReconciler struct {
 	APIReader                  client.Reader
 	TorPodNetworkPolicyEnabled bool
 	ClusterPodCIDRs            []string
-	// TestingNetworkIncludePath, when non-empty, is propagated into every
-	// rendered torrc as `%include <path>` (preceded by TestingTorNetwork 1
-	// + ClientUseIPv6 0). Source: the --testing-tor-network-file manager
-	// flag. Empty in production; only the e2e harness sets it.
-	TestingNetworkIncludePath string
+	// TestingNetworkInclude, when non-empty, holds the content that is
+	// spliced verbatim into every rendered torrc before the HiddenService
+	// block. Read from --testing-tor-network-file at operator startup.
+	// Empty in production; only the e2e harness sets it.
+	TestingNetworkInclude string
 }
 
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch;update;patch
@@ -416,7 +416,7 @@ func (r *GatewayReconciler) ensureTorrcConfigMap(
 	policy EffectiveServicePolicy,
 	auth EffectiveClientAuth,
 ) (*corev1.ConfigMap, error) {
-	desired, err := BuildTorrcConfigMap(gw, policy, auth, r.TestingNetworkIncludePath, r.Scheme)
+	desired, err := BuildTorrcConfigMap(gw, policy, auth, r.TestingNetworkInclude, r.Scheme)
 	if err != nil {
 		return nil, err
 	}
@@ -638,7 +638,7 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 		return fmt.Errorf("frontend RoleBinding: %w", err)
 	}
 
-	frontendTorrc, err := BuildFrontendTorrcConfigMap(gw, r.TestingNetworkIncludePath, r.Scheme)
+	frontendTorrc, err := BuildFrontendTorrcConfigMap(gw, r.TestingNetworkInclude, r.Scheme)
 	if err != nil {
 		return err
 	}
@@ -654,7 +654,7 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 	if err != nil {
 		return fmt.Errorf("find effective client auth for backend torrc: %w", err)
 	}
-	backendTorrc, err := BuildBackendTorrcConfigMap(gw, pol, backendPolicy, backendAuth, r.TestingNetworkIncludePath, r.Scheme)
+	backendTorrc, err := BuildBackendTorrcConfigMap(gw, pol, backendPolicy, backendAuth, r.TestingNetworkInclude, r.Scheme)
 	if err != nil {
 		return err
 	}

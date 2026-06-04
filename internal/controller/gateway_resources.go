@@ -124,14 +124,14 @@ func BuildKeySecret(gw *gwv1.Gateway, kp *tor.KeyPair, scheme *runtime.Scheme) (
 }
 
 // BuildTorrcConfigMap renders the torrc for the Gateway+policy combo into a
-// ConfigMap. When testingNetworkIncludePath is non-empty it is forwarded to
-// the renderer, which emits TestingTorNetwork 1 + %include <path> — used
-// only by the chutney e2e harness; empty in production.
+// ConfigMap. When testingNetworkInclude is non-empty it is spliced verbatim
+// into the rendered torrc before the HiddenService block — used only by the
+// chutney e2e harness; empty in production.
 func BuildTorrcConfigMap(
 	gw *gwv1.Gateway,
 	policy EffectiveServicePolicy,
 	auth EffectiveClientAuth,
-	testingNetworkIncludePath string,
+	testingNetworkInclude string,
 	scheme *runtime.Scheme,
 ) (*corev1.ConfigMap, error) {
 	cfg := &tor.TorrcConfig{
@@ -144,9 +144,9 @@ func BuildTorrcConfigMap(
 			TargetHost:  loopbackTargetHost,
 			TargetPort:  loopbackTargetPort,
 		},
-		MetricsPort:               torMetricsPort,
-		MetricsPortPolicy:         "accept 0.0.0.0/0",
-		TestingNetworkIncludePath: testingNetworkIncludePath,
+		MetricsPort:           torMetricsPort,
+		MetricsPortPolicy:     "accept 0.0.0.0/0",
+		TestingNetworkInclude: testingNetworkInclude,
 	}
 	if auth.Enabled {
 		cfg.ClientAuthDir = hsServiceDir + "/" + tor.AuthorizedClientsSubdir
