@@ -73,6 +73,18 @@ type TorrcConfig struct {
 	// inside the HiddenService block AND unconditionally omits the PoW
 	// directives (PoWDefensesEnabled is ignored). Used by backend pods in HA mode.
 	OnionbalanceInstance bool
+
+	// TestingNetworkIncludePath, when non-empty, makes the renderer emit
+	//   TestingTorNetwork 1
+	//   ClientUseIPv6 0
+	//   %include <TestingNetworkIncludePath>
+	// before the HiddenService block. Used to splice a chutney-generated
+	// DirAuthority fragment into the torrc so the Tor pod joins a private
+	// testing network instead of the public Tor network. Production
+	// deployments leave this empty; an empty value is a no-op and the
+	// rendered torrc is byte-identical to what was produced before this
+	// field existed.
+	TestingNetworkIncludePath string
 }
 
 // PortMapping is a single HiddenServicePort target.
@@ -168,6 +180,14 @@ func Render(c *TorrcConfig) (string, error) {
 	b.WriteString("ClientUseIPv4 1\n")
 	b.WriteString("ClientUseIPv6 1\n")
 	b.WriteString("\n")
+
+	if c.TestingNetworkIncludePath != "" {
+		b.WriteString("TestingTorNetwork 1\n")
+		b.WriteString("ClientUseIPv6 0\n")
+		b.WriteString("%include ")
+		b.WriteString(c.TestingNetworkIncludePath)
+		b.WriteString("\n")
+	}
 
 	fmt.Fprintf(&b, "HiddenServiceDir %s\n", c.HiddenServiceDir)
 	fmt.Fprintf(&b, "HiddenServiceVersion 3\n")

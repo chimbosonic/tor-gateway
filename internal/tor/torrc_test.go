@@ -289,6 +289,68 @@ func TestRenderNonBackendStillHonoursPoW(t *testing.T) {
 	}
 }
 
+func TestRender_TestingNetworkIncludePath_Empty(t *testing.T) {
+	// When the field is empty, output MUST be byte-identical to what a
+	// production render produces — regression guard against accidentally
+	// leaking testing-mode bytes into production torrcs.
+	cfg := TorrcConfig{
+		LogLevel:         "notice",
+		HiddenServiceDir: "/var/lib/tor/hs",
+		DataDirectory:    "/var/lib/tor/data",
+		HiddenServicePort: PortMapping{
+			VirtualPort: 80,
+			TargetHost:  "127.0.0.1",
+			TargetPort:  9080,
+		},
+		// TestingNetworkIncludePath intentionally unset
+	}
+	out, err := Render(&cfg)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, denied := range []string{"TestingTorNetwork", "%include", "ClientUseIPv6 0"} {
+		if strings.Contains(out, denied) {
+			t.Errorf("production render must not contain %q; got:\n%s", denied, out)
+		}
+	}
+}
+
+func TestRender_TestingNetworkIncludePath_Set(t *testing.T) {
+	cfg := TorrcConfig{
+		LogLevel:         "notice",
+		HiddenServiceDir: "/var/lib/tor/hs",
+		DataDirectory:    "/var/lib/tor/data",
+		HiddenServicePort: PortMapping{
+			VirtualPort: 80,
+			TargetHost:  "127.0.0.1",
+			TargetPort:  9080,
+		},
+		TestingNetworkIncludePath: "/etc/tor-gateway/testing-network/fragment",
+	}
+	out, err := Render(&cfg)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, required := range []string{
+		"TestingTorNetwork 1",
+		"ClientUseIPv6 0",
+		"%include /etc/tor-gateway/testing-network/fragment",
+	} {
+		if !strings.Contains(out, required) {
+			t.Errorf("expected %q in output:\n%s", required, out)
+		}
+	}
+	// The testing block MUST precede the HiddenService block — Tor parses
+	// torrc top-down and TestingTorNetwork must be set before HS
+	// directives so the relaxed timeouts apply during HS publication.
+	testingIdx := strings.Index(out, "TestingTorNetwork 1")
+	hsIdx := strings.Index(out, "HiddenServiceDir")
+	if testingIdx < 0 || hsIdx < 0 || testingIdx >= hsIdx {
+		t.Errorf("TestingTorNetwork must precede HiddenServiceDir; got testingIdx=%d hsIdx=%d\n%s",
+			testingIdx, hsIdx, out)
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || (len(sub) > 0 && (indexOf(s, sub) >= 0)))
 }
