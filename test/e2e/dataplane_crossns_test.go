@@ -127,7 +127,8 @@ spec:
 			"pod/tor-client", "--timeout=120s"))
 
 		By("control path /local routes (proves the circuit is live)")
-		Eventually(fetchOverTor("/local"), "2m", "5s").Should(Equal("local"))
+		// 5m for the first descriptor publish+lookup on chutney's 3-HSDir network.
+		Eventually(fetchOverTor("/local"), "5m", "5s").Should(Equal("local"))
 
 		By("ungated /remote does NOT route (cross-ns denied)")
 		Consistently(fetchOverTor("/remote"), "30s", "10s").ShouldNot(Equal("remote"))

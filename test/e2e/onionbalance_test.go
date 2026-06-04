@@ -233,7 +233,8 @@ spec:
 
 	It("routes by path to the correct backend over the master .onion", func() {
 		By("fetching / over Tor via onionbalance -> backend-A (waits for HS descriptor propagation)")
-		Eventually(fetchOverTor("ha-tor-client", "/"), "2m", "5s").
+		// 5m for the first descriptor publish+lookup on chutney's 3-HSDir network.
+		Eventually(fetchOverTor("ha-tor-client", "/"), "5m", "5s").
 			Should(Equal("backend-A"), "/ should route to backend-A via the master .onion")
 
 		By("fetching /api over Tor via onionbalance -> backend-B")

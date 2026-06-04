@@ -191,7 +191,8 @@ spec:
 		}
 
 		By("authorized client reaches the service (proves circuit live AND auth passes)")
-		Eventually(fetchFrom("tor-auth", "/"), "2m", "5s").Should(Equal("hello"))
+		// 5m for the first HS descriptor publish+lookup on chutney's 3-HSDir network.
+		Eventually(fetchFrom("tor-auth", "/"), "5m", "5s").Should(Equal("hello"))
 
 		By("unauthorized client is refused (Strict enforced)")
 		Consistently(fetchFrom("tor-noauth", "/"), "30s", "10s").ShouldNot(Equal("hello"))

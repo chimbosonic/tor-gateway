@@ -196,7 +196,10 @@ spec:
 		fetchOverTor := setupDataplaneRoute(chutneyTorClientPodYAML(dataplaneNS, "tor-client"))
 
 		By("fetching / over Tor -> backend-A (allows time for HS descriptor publish+lookup)")
-		Eventually(fetchOverTor("/"), "2m", "5s").Should(Equal("backend-A"))
+		// 5m budget for the first fetch: chutney's k8s-mini has only 3 HSDirs,
+		// so publisher/looker-up overlap can take a couple of voting cycles
+		// (20s each) to settle. Subsequent fetches reuse the cached descriptor.
+		Eventually(fetchOverTor("/"), "5m", "5s").Should(Equal("backend-A"))
 
 		By("fetching /api over Tor -> backend-B")
 		Eventually(fetchOverTor("/api"), "2m", "5s").Should(Equal("backend-B"))

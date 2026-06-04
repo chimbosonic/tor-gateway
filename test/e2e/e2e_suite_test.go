@@ -75,6 +75,17 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
+	if os.Getenv("TOR_GATEWAY_E2E_NO_TEARDOWN") == "1" {
+		By("TOR_GATEWAY_E2E_NO_TEARDOWN=1 — leaving cluster up for debugging")
+		fmt.Fprintln(GinkgoWriter,
+			"\n[debug] cluster kept alive. Inspect with:\n"+
+				"  kubectl --context kind-tor-gateway-test-e2e get ns\n"+
+				"  kubectl --context kind-tor-gateway-test-e2e -n tor-gateway-chutney logs chutney\n"+
+				"  kubectl --context kind-tor-gateway-test-e2e -n tor-gateway-system logs deployment/tor-gateway-controller-manager\n"+
+				"When done: make cleanup-test-e2e")
+		return
+	}
+
 	By("tearing down chutney unless TOR_GATEWAY_E2E_MODE=realtor")
 	if os.Getenv("TOR_GATEWAY_E2E_MODE") != "realtor" {
 		TeardownChutney()

@@ -133,6 +133,17 @@ test-e2e-realtor: setup-test-e2e manifests generate fmt vet ## Run only the real
 		-ginkgo.label-filter='realtor-smoke'
 	$(MAKE) cleanup-test-e2e
 
+.PHONY: test-e2e-debug
+test-e2e-debug: setup-test-e2e manifests generate fmt vet ## Run the e2e tests and leave the cluster up after AfterSuite for post-mortem debugging.
+	# TOR_GATEWAY_E2E_NO_TEARDOWN=1: AfterSuite skips TeardownChutney +
+	# teardownOperator + CRD uninstall. Inspect the cluster with kubectl;
+	# tear down manually with `make cleanup-test-e2e` when done.
+	TOR_GATEWAY_E2E_MODE=chutney TOR_GATEWAY_E2E_NO_TEARDOWN=1 \
+		KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) CERT_MANAGER_INSTALL_SKIP=true \
+		go test -tags=e2e -timeout 45m ./test/e2e/ -v -ginkgo.v
+	@echo
+	@echo "[debug] cluster left up. When done: make cleanup-test-e2e"
+
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
