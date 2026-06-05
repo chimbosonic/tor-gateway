@@ -21,6 +21,7 @@ You may obtain a copy of the License at
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -30,7 +31,28 @@ import (
 	"strings"
 
 	"github.com/chimbosonic/tor-gateway/internal/tor"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
+
+// fetchSecretToDir GETs the named Secret and writes each of its data
+// entries as a file under dst, preserving the entry names verbatim.
+func fetchSecretToDir(ctx context.Context, cs kubernetes.Interface, namespace, name, dst string) error {
+	s, err := cs.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get secret %s/%s: %w", namespace, name, err)
+	}
+	if err := os.MkdirAll(dst, tor.HiddenServiceDirMode); err != nil {
+		return err
+	}
+	for k, v := range s.Data {
+		if err := os.WriteFile(filepath.Join(dst, k), v, 0o600); err != nil {
+			return fmt.Errorf("write %s: %w", k, err)
+		}
+	}
+	return nil
+}
 
 func main() {
 	var (
@@ -39,6 +61,7 @@ func main() {
 		clientAuthSrc   string
 		obMasterAddress string
 		perPodKeysBase  string
+		apiFetchSecret  string
 	)
 	flag.StringVar(&src, "src", "/etc/tor-keys", "directory containing the mounted key Secret")
 	flag.StringVar(&dst, "dst", "/var/lib/tor/hs", "HiddenServiceDir to populate")
@@ -51,12 +74,15 @@ func main() {
 	flag.StringVar(&perPodKeysBase, "per-pod-keys-base", "",
 		"if set, copy hs_ed25519_*_key from <base>/<index>/ into HSDir; "+
 			"<index> is the trailing -N of $POD_NAME (HA backend mode)")
+	flag.StringVar(&apiFetchSecret, "api-fetch-secret", "",
+		"if set (NAMESPACE/NAME), fetch the named Secret via the in-cluster API and "+
+			"write its data entries into <dst>")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	if err := run(src, dst, clientAuthSrc, perPodKeysBase, obMasterAddress); err != nil {
+	if err := run(context.Background(), src, dst, clientAuthSrc, perPodKeysBase, obMasterAddress, apiFetchSecret); err != nil {
 		slog.Error("tor-init failed", "err", err)
 		os.Exit(1)
 	}
@@ -66,9 +92,28 @@ func main() {
 		"ob_master", obMasterAddress != "")
 }
 
-func run(src, dst, clientAuthSrc, perPodKeysBase, obMasterAddress string) error {
+func run(ctx context.Context, src, dst, clientAuthSrc, perPodKeysBase, obMasterAddress, apiFetchSecret string) error {
 	if err := os.MkdirAll(dst, tor.HiddenServiceDirMode); err != nil {
 		return err
+	}
+
+	if apiFetchSecret != "" {
+		parts := strings.SplitN(apiFetchSecret, "/", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return fmt.Errorf("--api-fetch-secret expects NAMESPACE/NAME, got %q", apiFetchSecret)
+		}
+		cfg, err := rest.InClusterConfig()
+		if err != nil {
+			return fmt.Errorf("in-cluster config: %w", err)
+		}
+		cs, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			return fmt.Errorf("kubernetes client: %w", err)
+		}
+		if err := fetchSecretToDir(ctx, cs, parts[0], parts[1], dst); err != nil {
+			return fmt.Errorf("api-fetch: %w", err)
+		}
+		slog.Info("tor-init: api-fetched secret", "ref", apiFetchSecret)
 	}
 
 	if perPodKeysBase != "" {

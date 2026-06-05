@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 // makeSecretMount builds a directory tree mimicking a Kubernetes Secret mount:
@@ -41,7 +46,7 @@ func TestRun_CopiesSecretMountSkippingDataSymlink(t *testing.T) {
 	src := makeSecretMount(t, want)
 	dst := filepath.Join(t.TempDir(), "hs")
 
-	if err := run(src, dst, "", "", ""); err != nil {
+	if err := run(context.Background(), src, dst, "", "", "", ""); err != nil {
 		t.Fatalf("run() returned error: %v", err)
 	}
 
@@ -123,5 +128,30 @@ func TestCopyPerPodKeys(t *testing.T) {
 func TestCopyPerPodKeysRejectsBadPodName(t *testing.T) {
 	if err := copyPerPodKeys(t.TempDir(), "noDash", t.TempDir()); err == nil {
 		t.Error("expected error on pod name with no trailing -N")
+	}
+}
+
+func TestApiFetchSecret_WritesKeyFilesAndHostname(t *testing.T) {
+	dst := t.TempDir()
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "blog-backend-2-keys", Namespace: "default"},
+		Data: map[string][]byte{
+			"hs_ed25519_secret_key": []byte("SECRET-KEY-BYTES"),
+			"hs_ed25519_public_key": []byte("PUBLIC-KEY-BYTES"),
+			"hostname":              []byte("aaaaaaaaaaaaaaaaaaaaaaaa.onion\n"),
+		},
+	}
+	cs := fake.NewSimpleClientset(secret)
+	if err := fetchSecretToDir(context.Background(), cs, "default", "blog-backend-2-keys", dst); err != nil {
+		t.Fatalf("fetchSecretToDir: %v", err)
+	}
+	for _, name := range []string{"hs_ed25519_secret_key", "hs_ed25519_public_key", "hostname"} {
+		b, err := os.ReadFile(filepath.Join(dst, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if len(b) == 0 {
+			t.Fatalf("%s empty", name)
+		}
 	}
 }
