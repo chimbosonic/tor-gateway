@@ -728,6 +728,23 @@ func TestBuildFrontendDeployment_IsTestnetFlag(t *testing.T) {
 	}
 }
 
+func TestBuildBackendKeySecret_OwnerUIDLabel(t *testing.T) {
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "blog",
+			Namespace: "default",
+			UID:       "abc-123",
+		},
+	}
+	s, err := BuildBackendKeySecret(gw, 0, nil, testScheme(t))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if got := s.Labels["torgateway.io/owner-uid"]; got != "abc-123" {
+		t.Errorf("owner-uid = %q, want abc-123", got)
+	}
+}
+
 func mapKeys[K comparable, V any](m map[K]V) []K {
 	out := make([]K, 0, len(m))
 	for k := range m {

@@ -62,10 +62,21 @@ func OnionbalanceConfigMapName(gw *gwv1.Gateway) string {
 	return gw.Name + "-onionbalance-config"
 }
 
+// ownerLabels extends HALabels with torgateway.io/owner-uid, which the
+// obrefresh informer requires to skip tenant-planted Secrets that happen
+// to match the gateway/role labels (defense in depth).
+func ownerLabels(gw *gwv1.Gateway, role string) map[string]string {
+	l := HALabels(gw, role)
+	l["torgateway.io/owner-uid"] = string(gw.UID)
+	return l
+}
+
 // BuildBackendKeySecret renders a per-pod Secret holding the ed25519 key
-// for backend index idx. The hostname field is intentionally left
-// unpopulated: tor-init writes it back on first pod start (mirroring the
-// Mode A <gw>-keys convention).
+// for backend index idx. data["hostname"] is pre-populated from the key
+// pair so obrefresh's readiness gate (which checks the field is non-empty)
+// fires immediately and so the renderer never depends on a tor-init
+// write-back. The owner-uid label lets the obrefresh informer filter out
+// tenant-planted Secrets carrying the same gateway/role labels.
 func BuildBackendKeySecret(gw *gwv1.Gateway, idx int, kp *tor.KeyPair, scheme *runtime.Scheme) (*corev1.Secret, error) {
 	if kp == nil {
 		var err error
@@ -82,7 +93,7 @@ func BuildBackendKeySecret(gw *gwv1.Gateway, idx int, kp *tor.KeyPair, scheme *r
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      BackendKeySecretName(gw, idx),
 			Namespace: gw.Namespace,
-			Labels:    HALabels(gw, haRoleBackend),
+			Labels:    ownerLabels(gw, haRoleBackend),
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{
