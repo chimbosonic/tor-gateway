@@ -33,15 +33,26 @@ func mustKeyPair(t *testing.T) *tor.KeyPair {
 	return kp
 }
 
+const testGatewayUID = "test-gw-uid-0001"
+
 func backendSecret(name, ns, hostname string) *corev1.Secret {
+	ctrl := true
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
 			Labels: map[string]string{
-				LabelGateway: "blog",
-				LabelRole:    "backend",
+				LabelGateway:  "blog",
+				LabelRole:     "backend",
+				LabelOwnerUID: testGatewayUID,
 			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "gateway.networking.k8s.io/v1",
+				Kind:       "Gateway",
+				Name:       "blog",
+				UID:        testGatewayUID,
+				Controller: &ctrl,
+			}},
 		},
 		Data: map[string][]byte{
 			// hostname is the full "<56chars>.onion" string as written by tor-init.
@@ -76,6 +87,7 @@ func TestRefresherInitialRender(t *testing.T) {
 		PIDFile:          pidPath,
 		Interval:         5 * time.Millisecond,
 		Master:           master,
+		OwnerUID:         testGatewayUID,
 		Client:           cli,
 	})
 	if err != nil {
@@ -106,12 +118,13 @@ func TestRefresherRequiresMandatoryFields(t *testing.T) {
 		name string
 		cfg  RefresherConfig
 	}{
-		{"missing gateway", RefresherConfig{GatewayNamespace: "ns", ConfigPath: "/c", PIDFile: "/p", MasterKeyPath: "/k", Client: fake.NewClientset()}},
-		{"missing namespace", RefresherConfig{GatewayName: "g", ConfigPath: "/c", PIDFile: "/p", MasterKeyPath: "/k", Client: fake.NewClientset()}},
-		{"missing config", RefresherConfig{GatewayName: "g", GatewayNamespace: "ns", PIDFile: "/p", MasterKeyPath: "/k", Client: fake.NewClientset()}},
-		{"missing pidfile", RefresherConfig{GatewayName: "g", GatewayNamespace: "ns", ConfigPath: "/c", MasterKeyPath: "/k", Client: fake.NewClientset()}},
-		{"missing master path", RefresherConfig{GatewayName: "g", GatewayNamespace: "ns", ConfigPath: "/c", PIDFile: "/p", Client: fake.NewClientset()}},
-		{"missing client", RefresherConfig{GatewayName: "g", GatewayNamespace: "ns", ConfigPath: "/c", PIDFile: "/p", MasterKeyPath: "/k"}},
+		{"missing gateway", RefresherConfig{GatewayNamespace: "ns", ConfigPath: "/c", PIDFile: "/p", MasterKeyPath: "/k", OwnerUID: "uid", Client: fake.NewClientset()}},
+		{"missing namespace", RefresherConfig{GatewayName: "g", ConfigPath: "/c", PIDFile: "/p", MasterKeyPath: "/k", OwnerUID: "uid", Client: fake.NewClientset()}},
+		{"missing config", RefresherConfig{GatewayName: "g", GatewayNamespace: "ns", PIDFile: "/p", MasterKeyPath: "/k", OwnerUID: "uid", Client: fake.NewClientset()}},
+		{"missing pidfile", RefresherConfig{GatewayName: "g", GatewayNamespace: "ns", ConfigPath: "/c", MasterKeyPath: "/k", OwnerUID: "uid", Client: fake.NewClientset()}},
+		{"missing master path", RefresherConfig{GatewayName: "g", GatewayNamespace: "ns", ConfigPath: "/c", PIDFile: "/p", OwnerUID: "uid", Client: fake.NewClientset()}},
+		{"missing client", RefresherConfig{GatewayName: "g", GatewayNamespace: "ns", ConfigPath: "/c", PIDFile: "/p", MasterKeyPath: "/k", OwnerUID: "uid"}},
+		{"missing owner uid", RefresherConfig{GatewayName: "g", GatewayNamespace: "ns", ConfigPath: "/c", PIDFile: "/p", MasterKeyPath: "/k", Client: fake.NewClientset()}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -119,5 +132,64 @@ func TestRefresherRequiresMandatoryFields(t *testing.T) {
 				t.Fatalf("expected error, got nil")
 			}
 		})
+	}
+}
+
+func TestBackendsFromSecrets_FilterByOwnerUID(t *testing.T) {
+	legitAddr := mustKeyPair(t).OnionAddress()
+	impostorAddr := mustKeyPair(t).OnionAddress()
+	ctrl := true
+	legit := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "blog-backend-0-keys",
+			Labels: map[string]string{
+				"torgateway.io/gateway":   "blog",
+				"torgateway.io/role":      "backend",
+				"torgateway.io/owner-uid": "abc-123",
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "gateway.networking.k8s.io/v1",
+				Kind:       "Gateway",
+				Name:       "blog",
+				UID:        "abc-123",
+				Controller: &ctrl,
+			}},
+		},
+		Data: map[string][]byte{"hostname": []byte(legitAddr.String())},
+	}
+	impostor := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "blog-backend-0-keys-evil",
+			Labels: map[string]string{
+				"torgateway.io/gateway":   "blog",
+				"torgateway.io/role":      "backend",
+				"torgateway.io/owner-uid": "different-uid",
+			},
+		},
+		Data: map[string][]byte{"hostname": []byte(impostorAddr.String())},
+	}
+	addrs := backendsFromSecrets([]any{legit, impostor}, "abc-123")
+	if len(addrs) != 1 {
+		t.Fatalf("want 1 address, got %d: %v", len(addrs), addrs)
+	}
+}
+
+func TestBackendsFromSecrets_RequiresOwnerReference(t *testing.T) {
+	// Labels match but no owner reference → skip.
+	addr := mustKeyPair(t).OnionAddress()
+	s := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "blog-backend-0-keys",
+			Labels: map[string]string{
+				"torgateway.io/gateway":   "blog",
+				"torgateway.io/role":      "backend",
+				"torgateway.io/owner-uid": "abc-123",
+			},
+		},
+		Data: map[string][]byte{"hostname": []byte(addr.String())},
+	}
+	addrs := backendsFromSecrets([]any{s}, "abc-123")
+	if len(addrs) != 0 {
+		t.Errorf("expected 0 addrs (no controller ownerRef), got %d", len(addrs))
 	}
 }

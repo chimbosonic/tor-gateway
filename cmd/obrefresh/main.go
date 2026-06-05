@@ -39,6 +39,7 @@ func main() {
 	var (
 		gatewayName   string
 		gatewayNS     string
+		gatewayUID    string
 		configPath    string
 		pidPath       string
 		interval      time.Duration
@@ -47,6 +48,7 @@ func main() {
 	)
 	flag.StringVar(&gatewayName, "gateway", "", "name of the Gateway this refresher serves")
 	flag.StringVar(&gatewayNS, "namespace", "", "namespace of the Gateway this refresher serves")
+	flag.StringVar(&gatewayUID, "gateway-uid", "", "Gateway.metadata.uid; used to label-filter backend Secrets")
 	flag.StringVar(&configPath, "config", "/etc/onionbalance/config.yaml",
 		"path to write the rendered onionbalance config")
 	flag.StringVar(&pidPath, "pidfile", "/run/onionbalance/onionbalance.pid",
@@ -64,6 +66,10 @@ func main() {
 
 	if gatewayName == "" || gatewayNS == "" {
 		slog.Error("--gateway and --namespace are required")
+		os.Exit(2)
+	}
+	if gatewayUID == "" {
+		slog.Error("--gateway-uid is required")
 		os.Exit(2)
 	}
 	if masterAddr == "" {
@@ -103,6 +109,7 @@ func main() {
 		PIDFile:          pidPath,
 		Interval:         interval,
 		Master:           master,
+		OwnerUID:         gatewayUID,
 		Client:           client,
 	})
 	if err != nil {

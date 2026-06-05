@@ -708,6 +708,7 @@ func BuildFrontendDeployment(
 					Args: []string{
 						"--gateway=" + gw.Name,
 						"--namespace=" + gw.Namespace,
+						fmt.Sprintf("--gateway-uid=%s", gw.UID),
 						"--master-address=" + master.String(),
 						"--master-key-path=/etc/onionbalance/keys/hs_ed25519_secret_key",
 						"--config=/etc/onionbalance/config/config.yaml",

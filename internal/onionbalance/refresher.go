@@ -25,7 +25,6 @@ import (
 	"github.com/chimbosonic/tor-gateway/internal/tor"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -37,6 +36,11 @@ const LabelGateway = "torgateway.io/gateway"
 
 // LabelRole identifies backend Secrets within a Gateway's set.
 const LabelRole = "torgateway.io/role"
+
+// LabelOwnerUID carries the Gateway's metadata.uid so the informer
+// LabelSelector and backendsFromSecrets can both reject Secrets that were
+// planted by a namespace tenant carrying only the gateway/role labels.
+const LabelOwnerUID = "torgateway.io/owner-uid"
 
 // HostnameField is the Secret data key into which each backend's tor-init
 // writes its derived .onion; mirrors the Mode A convention for <gw>-keys.
@@ -51,6 +55,11 @@ type RefresherConfig struct {
 	PIDFile          string        // pidfile of the onionbalance daemon
 	Interval         time.Duration // debounce window
 	Master           tor.OnionAddress
+	// OwnerUID is the Gateway's metadata.uid. It is stamped onto backend Secrets
+	// as the torgateway.io/owner-uid label so the informer's LabelSelector and
+	// backendsFromSecrets can both reject tenant-planted Secrets that happen to
+	// carry the gateway/role labels.
+	OwnerUID string
 	// Client is the Kubernetes clientset to drive the informer. Production
 	// callers pass a real clientset; tests pass a fake (k8s.io/client-go/kubernetes/fake).
 	Client kubernetes.Interface
@@ -78,6 +87,9 @@ func NewRefresher(_ context.Context, cfg RefresherConfig) (*Refresher, error) {
 	if cfg.Client == nil {
 		return nil, errors.New("onionbalance: Client is required")
 	}
+	if cfg.OwnerUID == "" {
+		return nil, errors.New("onionbalance: OwnerUID is required")
+	}
 	if cfg.Interval <= 0 {
 		cfg.Interval = 30 * time.Second
 	}
@@ -89,10 +101,12 @@ func NewRefresher(_ context.Context, cfg RefresherConfig) (*Refresher, error) {
 // update / delete event triggers a debounced rewrite of config.yaml and
 // a SIGHUP to the onionbalance daemon.
 func (r *Refresher) Run(ctx context.Context) error {
-	selector := labels.SelectorFromSet(labels.Set{
-		LabelGateway: r.cfg.GatewayName,
-		LabelRole:    "backend",
-	}).String()
+	selector := fmt.Sprintf(
+		"%s=%s,%s=backend,%s=%s",
+		LabelGateway, r.cfg.GatewayName,
+		LabelRole,
+		LabelOwnerUID, r.cfg.OwnerUID,
+	)
 	factory := informers.NewSharedInformerFactoryWithOptions(
 		r.cfg.Client,
 		0,
@@ -151,7 +165,7 @@ func (r *Refresher) fire() {
 // rebuild renders config.yaml from the provided Secret list and SIGHUPs.
 // Exposed for tests; production calls go through schedule()→fire().
 func (r *Refresher) rebuild(_ context.Context, objs []any) {
-	backends := backendsFromSecrets(objs)
+	backends := backendsFromSecrets(objs, r.cfg.OwnerUID)
 	if len(backends) == 0 {
 		// Onionbalance refuses to start on an empty instances list and
 		// the entrypoint script blocks waiting for at least one backend.
@@ -177,11 +191,30 @@ func (r *Refresher) rebuild(_ context.Context, objs []any) {
 	slog.Info("onionbalance config refreshed", "backends", len(backends))
 }
 
-func backendsFromSecrets(objs []any) []tor.OnionAddress {
+func backendsFromSecrets(objs []any, ownerUID string) []tor.OnionAddress {
 	out := make([]tor.OnionAddress, 0, len(objs))
 	for _, o := range objs {
 		s, ok := o.(*corev1.Secret)
 		if !ok {
+			continue
+		}
+		// Label filter: the informer LabelSelector already enforces this at the
+		// API-server level; checking here defends against test fakes and future
+		// code paths that bypass the informer.
+		if s.Labels[LabelOwnerUID] != ownerUID {
+			continue
+		}
+		// OwnerReference check: a tenant with secrets/create could plant a
+		// Secret with matching labels. Only trust Secrets whose controller
+		// owner matches the Gateway UID.
+		ownedByGW := false
+		for _, or_ := range s.OwnerReferences {
+			if string(or_.UID) == ownerUID && or_.Controller != nil && *or_.Controller {
+				ownedByGW = true
+				break
+			}
+		}
+		if !ownedByGW {
 			continue
 		}
 		raw, ok := s.Data[HostnameField]

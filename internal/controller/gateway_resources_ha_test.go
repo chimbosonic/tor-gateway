@@ -1037,6 +1037,30 @@ func TestBuildFrontendRole_GetIsResourceNamesScoped(t *testing.T) {
 	}
 }
 
+func TestBuildFrontendDeployment_ObrefreshGatewayUIDArg(t *testing.T) {
+	gw := sampleGateway()
+	gw.UID = "abc-123"
+	obp := samplePolicy(3)
+	dep, err := BuildFrontendDeployment(gw, obp, tor.OnionAddress{}, sampleImages(), false, testScheme(t))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	var sawArg bool
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		if c.Name != "obrefresh" {
+			continue
+		}
+		for _, a := range c.Args {
+			if a == "--gateway-uid=abc-123" {
+				sawArg = true
+			}
+		}
+	}
+	if !sawArg {
+		t.Fatalf("obrefresh missing --gateway-uid arg")
+	}
+}
+
 func TestBuildFrontendRole_CrossNSMasterOmitsFromInNSResourceNames(t *testing.T) {
 	gw := sampleGateway()
 	obp := samplePolicy(2)
