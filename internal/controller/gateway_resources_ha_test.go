@@ -750,19 +750,33 @@ func TestBuildFrontendDeployment_MasterFetchInitContainer(t *testing.T) {
 	}
 	var sawFetch bool
 	for _, c := range dep.Spec.Template.Spec.InitContainers {
+		var foundFetch, foundSrcEmpty bool
 		for _, a := range c.Args {
 			if a == "--api-fetch-secret=secrets-ns/ob-master" {
-				sawFetch = true
-				var sawMount bool
-				for _, m := range c.VolumeMounts {
-					if m.Name == "ob-keys" && m.MountPath == "/etc/onionbalance/keys" {
-						sawMount = true
-					}
-				}
-				if !sawMount {
-					t.Errorf("master-fetch init container missing ob-keys mount; mounts: %v", c.VolumeMounts)
-				}
+				foundFetch = true
 			}
+			if a == "--src=" {
+				foundSrcEmpty = true
+			}
+		}
+		if !foundFetch {
+			continue
+		}
+		sawFetch = true
+		// --src= must be empty so tor-init skips the Mode A copy path
+		// (which defaults to /etc/tor-keys — a directory this init container
+		// does not mount).
+		if !foundSrcEmpty {
+			t.Errorf("master-fetch init container missing --src= (empty); args: %v", c.Args)
+		}
+		var sawMount bool
+		for _, m := range c.VolumeMounts {
+			if m.Name == "ob-keys" && m.MountPath == "/etc/onionbalance/keys" {
+				sawMount = true
+			}
+		}
+		if !sawMount {
+			t.Errorf("master-fetch init container missing ob-keys mount; mounts: %v", c.VolumeMounts)
 		}
 	}
 	if !sawFetch {

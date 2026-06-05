@@ -629,6 +629,7 @@ func BuildFrontendDeployment(
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Args: []string{
 			"--dst=/etc/onionbalance/keys",
+			"--src=",
 			fmt.Sprintf("--api-fetch-secret=%s/%s", masterNS, masterName),
 		},
 		VolumeMounts: []corev1.VolumeMount{
