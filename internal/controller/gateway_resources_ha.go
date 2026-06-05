@@ -527,10 +527,11 @@ func BuildFrontendTorrcConfigMap(gw *gwv1.Gateway, testingNetworkInclude string,
 	return cm, nil
 }
 
-// BuildFrontendDeployment renders the onionbalance frontend Deployment. Three
-// runtime containers (tor, onionbalance, obrefresh) — no init container. The
-// master key Secret is mounted RO at /etc/onionbalance/keys; obrefresh writes
-// the onionbalance config into the ob-config emptyDir and signals the
+// BuildFrontendDeployment renders the onionbalance frontend Deployment. A
+// master-fetch init container populates the ob-keys emptyDir by fetching the
+// master key Secret via the tor-init API-fetch path. Three runtime containers
+// (tor, onionbalance, obrefresh) then consume the keys read-only; obrefresh
+// writes the onionbalance config into the ob-config emptyDir and signals the
 // onionbalance process via the ob-run emptyDir pidfile.
 func BuildFrontendDeployment(
 	gw *gwv1.Gateway,
@@ -540,7 +541,6 @@ func BuildFrontendDeployment(
 	testingMode bool,
 	scheme *runtime.Scheme,
 ) (*appsv1.Deployment, error) {
-	masterSecretName := pol.Spec.MasterKeySecretRef.Name
 	labels := HALabels(gw, haRoleFrontend)
 
 	// In testing mode, --is-testnet drops onionbalance's descriptor cycle
@@ -552,13 +552,34 @@ func BuildFrontendDeployment(
 		obArgs = append(obArgs, "--is-testnet")
 	}
 
+	// Resolve the master Secret namespace: default to the Gateway's own
+	// namespace when the ref omits one (same-namespace Secret).
+	masterNS := pol.Spec.MasterKeySecretRef.Namespace
+	if masterNS == "" {
+		masterNS = gw.Namespace
+	}
+	masterName := pol.Spec.MasterKeySecretRef.Name
+
 	// Pointer-to-literal locals; using ptr.To(true) trips modernize's
 	// newexpr rule, whose suggested rewrite to new(T) silently swaps in
 	// the zero value and would weaken pod security.
 	nonRoot := true
 	uid := int64(65532)
 	replicas := int32(1)
-	secretMode := int32(0o400)
+
+	masterFetch := corev1.Container{
+		Name:            "master-fetch",
+		Image:           images.TorInit,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Args: []string{
+			"--dst=/etc/onionbalance/keys",
+			fmt.Sprintf("--api-fetch-secret=%s/%s", masterNS, masterName),
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "ob-keys", MountPath: "/etc/onionbalance/keys"},
+		},
+		SecurityContext: haHardenedSecurityContext(),
+	}
 
 	pod := corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: labels},
@@ -571,6 +592,7 @@ func BuildFrontendDeployment(
 				FSGroup:        &uid,
 				SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 			},
+			InitContainers: []corev1.Container{masterFetch},
 			Containers: []corev1.Container{
 				{
 					Name:           "tor",
@@ -621,13 +643,7 @@ func BuildFrontendDeployment(
 				{Name: "tor-data", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 				{Name: "ob-config", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 				{Name: "ob-run", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-				{
-					Name: "ob-keys",
-					VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-						SecretName:  masterSecretName,
-						DefaultMode: &secretMode,
-					}},
-				},
+				{Name: "ob-keys", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 				{
 					Name: "torrc",
 					VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{

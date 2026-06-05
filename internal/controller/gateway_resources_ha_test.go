@@ -775,6 +775,81 @@ func mapKeys[K comparable, V any](m map[K]V) []K {
 	return out
 }
 
+func TestBuildFrontendDeployment_NoSecretVolumeForMasterKey(t *testing.T) {
+	gw := sampleGateway()
+	obp := samplePolicy(1)
+	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns"
+	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	dep, err := BuildFrontendDeployment(gw, obp, tor.OnionAddress{}, sampleImages(), false, testScheme(t))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.Name == "ob-keys" {
+			if v.Secret != nil {
+				t.Fatalf("ob-keys still uses SecretVolumeSource; should be emptyDir")
+			}
+			if v.EmptyDir == nil {
+				t.Fatalf("ob-keys should be emptyDir; got %+v", v.VolumeSource)
+			}
+		}
+	}
+}
+
+func TestBuildFrontendDeployment_MasterFetchInitContainer(t *testing.T) {
+	gw := sampleGateway()
+	obp := samplePolicy(1)
+	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns"
+	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	dep, err := BuildFrontendDeployment(gw, obp, tor.OnionAddress{}, sampleImages(), false, testScheme(t))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	var sawFetch bool
+	for _, c := range dep.Spec.Template.Spec.InitContainers {
+		for _, a := range c.Args {
+			if a == "--api-fetch-secret=secrets-ns/ob-master" {
+				sawFetch = true
+				var sawMount bool
+				for _, m := range c.VolumeMounts {
+					if m.Name == "ob-keys" && m.MountPath == "/etc/onionbalance/keys" {
+						sawMount = true
+					}
+				}
+				if !sawMount {
+					t.Errorf("master-fetch init container missing ob-keys mount; mounts: %v", c.VolumeMounts)
+				}
+			}
+		}
+	}
+	if !sawFetch {
+		t.Fatalf("no init container with --api-fetch-secret=secrets-ns/ob-master")
+	}
+}
+
+func TestBuildFrontendDeployment_MasterFetchUsesGatewayNamespaceWhenMasterRefNamespaceEmpty(t *testing.T) {
+	gw := sampleGateway()
+	obp := samplePolicy(1)
+	obp.Spec.MasterKeySecretRef.Namespace = ""
+	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	dep, err := BuildFrontendDeployment(gw, obp, tor.OnionAddress{}, sampleImages(), false, testScheme(t))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	wantArg := "--api-fetch-secret=" + gw.Namespace + "/ob-master"
+	var sawFetch bool
+	for _, c := range dep.Spec.Template.Spec.InitContainers {
+		for _, a := range c.Args {
+			if a == wantArg {
+				sawFetch = true
+			}
+		}
+	}
+	if !sawFetch {
+		t.Fatalf("expected fetch arg %q to use gateway namespace; init containers: %+v", wantArg, dep.Spec.Template.Spec.InitContainers)
+	}
+}
+
 // --- BuildBackendTorrcConfigMap ---
 
 func TestBuildBackendTorrcConfigMap(t *testing.T) {
