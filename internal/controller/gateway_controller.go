@@ -619,6 +619,37 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 		if err := r.ensureHARoleBinding(ctx, rb); err != nil {
 			return fmt.Errorf("cross-NS RoleBinding: %w", err)
 		}
+
+		// GC stale cross-NS Role/RoleBinding pairs from namespaces no longer in the OBP spec.
+		currentNS := pol.Spec.MasterKeySecretRef.Namespace
+		staleLabels := client.MatchingLabels{
+			"app.kubernetes.io/managed-by": "tor-gateway",
+			"torgateway.io/owner-uid":      string(gw.UID),
+		}
+		var staleRoles rbacv1.RoleList
+		if err := r.List(ctx, &staleRoles, staleLabels); err != nil {
+			return fmt.Errorf("list stale cross-NS roles: %w", err)
+		}
+		for i := range staleRoles.Items {
+			if staleRoles.Items[i].Namespace == currentNS {
+				continue
+			}
+			if err := client.IgnoreNotFound(r.Delete(ctx, &staleRoles.Items[i])); err != nil {
+				return fmt.Errorf("delete stale cross-NS role: %w", err)
+			}
+		}
+		var staleRBs rbacv1.RoleBindingList
+		if err := r.List(ctx, &staleRBs, staleLabels); err != nil {
+			return fmt.Errorf("list stale cross-NS rolebindings: %w", err)
+		}
+		for i := range staleRBs.Items {
+			if staleRBs.Items[i].Namespace == currentNS {
+				continue
+			}
+			if err := client.IgnoreNotFound(r.Delete(ctx, &staleRBs.Items[i])); err != nil {
+				return fmt.Errorf("delete stale cross-NS rolebinding: %w", err)
+			}
+		}
 	}
 
 	var masterSec corev1.Secret
@@ -983,6 +1014,30 @@ func (r *GatewayReconciler) cleanupModeBResources(ctx context.Context, gw *gwv1.
 			return err
 		}
 	}
+	// GC cross-NS Role + RoleBinding pairs (label-based; cross-NS owner refs are invalid).
+	crossNSLabels := client.MatchingLabels{
+		"app.kubernetes.io/managed-by": "tor-gateway",
+		"torgateway.io/owner-uid":      string(gw.UID),
+	}
+	var crossRoles rbacv1.RoleList
+	if err := r.List(ctx, &crossRoles, crossNSLabels); err != nil {
+		return fmt.Errorf("list cross-NS roles: %w", err)
+	}
+	for i := range crossRoles.Items {
+		if err := client.IgnoreNotFound(r.Delete(ctx, &crossRoles.Items[i])); err != nil {
+			return fmt.Errorf("delete cross-NS role: %w", err)
+		}
+	}
+	var crossRBs rbacv1.RoleBindingList
+	if err := r.List(ctx, &crossRBs, crossNSLabels); err != nil {
+		return fmt.Errorf("list cross-NS rolebindings: %w", err)
+	}
+	for i := range crossRBs.Items {
+		if err := client.IgnoreNotFound(r.Delete(ctx, &crossRBs.Items[i])); err != nil {
+			return fmt.Errorf("delete cross-NS rolebinding: %w", err)
+		}
+	}
+
 	var secrets corev1.SecretList
 	if err := r.List(ctx, &secrets,
 		client.InNamespace(gw.Namespace),

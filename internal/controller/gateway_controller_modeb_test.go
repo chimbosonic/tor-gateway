@@ -155,3 +155,115 @@ func TestCleanupModeBResources_DeletesOnionbalanceConfigMap(t *testing.T) {
 		t.Fatalf("expected NotFound, got %v", err)
 	}
 }
+
+func TestEnsureModeB_GCsStaleCrossNSPairs(t *testing.T) {
+	ctx := context.Background()
+	gw := sampleGateway()
+	gw.UID = "abc-123"
+	obp := samplePolicy(3)
+	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns-new"
+	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+
+	staleRole := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      CrossNSMasterRoleName(gw),
+			Namespace: "secrets-ns-old",
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "tor-gateway",
+				"torgateway.io/owner-uid":      "abc-123",
+			},
+		},
+	}
+	staleRB := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      CrossNSMasterRoleName(gw),
+			Namespace: "secrets-ns-old",
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "tor-gateway",
+				"torgateway.io/owner-uid":      "abc-123",
+			},
+		},
+	}
+	masterSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "ob-master", Namespace: "secrets-ns-new"},
+		Data:       validMasterSecretData(t),
+	}
+	rg := &gwv1beta1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "allow-new", Namespace: "secrets-ns-new"},
+		Spec: gwv1beta1.ReferenceGrantSpec{
+			From: []gwv1beta1.ReferenceGrantFrom{{
+				Group:     "policy.torgateway.io",
+				Kind:      "OnionBalancePolicy",
+				Namespace: gwv1beta1.Namespace(gw.Namespace),
+			}},
+			To: []gwv1beta1.ReferenceGrantTo{{Group: "", Kind: "Secret"}},
+		},
+	}
+
+	sc := testSchemeWithGrants(t)
+	cl := fake.NewClientBuilder().
+		WithScheme(sc).
+		WithRESTMapper(testRESTMapper()).
+		WithStatusSubresource(gw).
+		WithObjects(gw, obp, masterSecret, rg, staleRole, staleRB).
+		Build()
+	r := &GatewayReconciler{Client: cl, Scheme: sc, Images: sampleImages()}
+	if err := r.ensureModeB(ctx, gw, obp); err != nil {
+		t.Fatalf("ensureModeB: %v", err)
+	}
+
+	// Old namespace pair gone.
+	err := cl.Get(ctx, types.NamespacedName{Namespace: "secrets-ns-old", Name: CrossNSMasterRoleName(gw)}, &rbacv1.Role{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("stale Role in secrets-ns-old should be deleted; got %v", err)
+	}
+	err = cl.Get(ctx, types.NamespacedName{Namespace: "secrets-ns-old", Name: CrossNSMasterRoleName(gw)}, &rbacv1.RoleBinding{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("stale RoleBinding in secrets-ns-old should be deleted; got %v", err)
+	}
+
+	// New namespace pair exists.
+	err = cl.Get(ctx, types.NamespacedName{Namespace: "secrets-ns-new", Name: CrossNSMasterRoleName(gw)}, &rbacv1.Role{})
+	if err != nil {
+		t.Fatalf("new Role in secrets-ns-new should exist; got %v", err)
+	}
+}
+
+func TestCleanupModeBResources_GCsAllCrossNSPairs(t *testing.T) {
+	ctx := context.Background()
+	gw := sampleGateway()
+	gw.UID = "abc-123"
+	crossNSRole := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      CrossNSMasterRoleName(gw),
+			Namespace: "secrets-ns",
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "tor-gateway",
+				"torgateway.io/owner-uid":      "abc-123",
+			},
+		},
+	}
+	crossNSRB := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      CrossNSMasterRoleName(gw),
+			Namespace: "secrets-ns",
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "tor-gateway",
+				"torgateway.io/owner-uid":      "abc-123",
+			},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(gw, crossNSRole, crossNSRB).Build()
+	r := &GatewayReconciler{Client: cl, Scheme: testScheme(t)}
+	if err := r.cleanupModeBResources(ctx, gw); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	err := cl.Get(ctx, types.NamespacedName{Namespace: "secrets-ns", Name: CrossNSMasterRoleName(gw)}, &rbacv1.Role{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("cross-NS Role should be deleted; got %v", err)
+	}
+	err = cl.Get(ctx, types.NamespacedName{Namespace: "secrets-ns", Name: CrossNSMasterRoleName(gw)}, &rbacv1.RoleBinding{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("cross-NS RoleBinding should be deleted; got %v", err)
+	}
+}

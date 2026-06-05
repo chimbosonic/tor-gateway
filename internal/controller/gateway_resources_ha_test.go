@@ -273,23 +273,6 @@ func TestBuildBackendStatefulSet_RouterSidecarPresent(t *testing.T) {
 	}
 }
 
-func TestBuildBackendStatefulSet_KeysVolumeAbsent(t *testing.T) {
-	scheme := testScheme(t)
-	gw := sampleStatefulSetGateway()
-	pol := samplePolicy(3)
-	master := sampleMasterAddr(t)
-
-	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, v := range ss.Spec.Template.Spec.Volumes {
-		if v.Name == "keys" {
-			t.Fatal("keys volume must not be present: keys are now API-fetched by tor-init")
-		}
-	}
-}
-
 func TestBuildBackendStatefulSet_NoProjectedKeysVolume(t *testing.T) {
 	scheme := testScheme(t)
 	gw := sampleStatefulSetGateway()

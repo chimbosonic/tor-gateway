@@ -520,12 +520,6 @@ func BuildFrontendTorrcConfigMap(gw *gwv1.Gateway, testingNetworkInclude string,
 	return cm, nil
 }
 
-// BuildFrontendDeployment renders the onionbalance frontend Deployment. A
-// master-fetch init container populates the ob-keys emptyDir by fetching the
-// master key Secret via the tor-init API-fetch path. Three runtime containers
-// (tor, onionbalance, obrefresh) then consume the keys read-only; obrefresh
-// writes the onionbalance config into the ob-config emptyDir and signals the
-// onionbalance process via the ob-run emptyDir pidfile.
 // CrossNSMasterRoleName returns the name used for the cross-NS Role + RoleBinding pair.
 func CrossNSMasterRoleName(gw *gwv1.Gateway) string {
 	return FrontendName(gw) + "-master-fetch"
@@ -533,8 +527,8 @@ func CrossNSMasterRoleName(gw *gwv1.Gateway) string {
 
 // BuildCrossNSMasterRole emits a Role in pol.Spec.MasterKeySecretRef.Namespace
 // that allows `get` on exactly the named master Secret. The Role is NOT
-// controller-referenced (cross-namespace owner refs are invalid). The operator
-// GCs it on Gateway delete by label.
+// controller-referenced (cross-namespace owner refs are invalid); it is GC'd
+// by label in cleanupModeBResources and when the spec namespace changes.
 func BuildCrossNSMasterRole(gw *gwv1.Gateway, pol *policyv1alpha1.OnionBalancePolicy, _ *runtime.Scheme) (*rbacv1.Role, error) {
 	if pol.Spec.MasterKeySecretRef.Namespace == "" {
 		return nil, fmt.Errorf("BuildCrossNSMasterRole: MasterKeySecretRef.Namespace empty")
@@ -589,6 +583,12 @@ func BuildCrossNSMasterRoleBinding(gw *gwv1.Gateway, pol *policyv1alpha1.OnionBa
 	}, nil
 }
 
+// BuildFrontendDeployment renders the onionbalance frontend Deployment. A
+// master-fetch init container populates the ob-keys emptyDir by fetching the
+// master key Secret via the tor-init API-fetch path. Three runtime containers
+// (tor, onionbalance, obrefresh) then consume the keys read-only; obrefresh
+// writes the onionbalance config into the ob-config emptyDir and signals the
+// onionbalance process via the ob-run emptyDir pidfile.
 func BuildFrontendDeployment(
 	gw *gwv1.Gateway,
 	pol *policyv1alpha1.OnionBalancePolicy,
