@@ -24,7 +24,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
-	gwv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
 	"github.com/chimbosonic/tor-gateway/internal/tor"
@@ -172,7 +171,7 @@ func (r *OnionBalancePolicyReconciler) validateMasterKey(ctx context.Context, po
 		ns = pol.Namespace
 	}
 	if ns != pol.Namespace {
-		allowed, err := masterKeyReferenceGrantAllows(ctx, r.Client, pol, ns)
+		allowed, err := MasterKeyReferenceGrantAllows(ctx, r.Client, nil, pol)
 		if err != nil {
 			return fmt.Errorf("evaluate ReferenceGrant: %w", err)
 		}
@@ -229,22 +228,6 @@ func powForcedOff(ctx context.Context, c client.Client, gw *gwv1.Gateway) bool {
 		}
 	}
 	return false
-}
-
-func masterKeyReferenceGrantAllows(ctx context.Context, c client.Client, pol *policyv1alpha1.OnionBalancePolicy, targetNS string) (bool, error) {
-	var grantList gwv1beta1.ReferenceGrantList
-	if err := c.List(ctx, &grantList, client.InNamespace(targetNS)); err != nil {
-		return false, err
-	}
-	return Allows(grantList.Items, FromRef{
-		Group:     "policy.torgateway.io",
-		Kind:      "OnionBalancePolicy",
-		Namespace: pol.Namespace,
-	}, ToRef{
-		Group: "",
-		Kind:  "Secret",
-		Name:  pol.Spec.MasterKeySecretRef.Name,
-	}), nil
 }
 
 // SetupWithManager registers the reconciler.

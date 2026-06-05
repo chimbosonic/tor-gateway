@@ -595,6 +595,32 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 	if masterSecretNS == "" {
 		masterSecretNS = pol.Namespace
 	}
+
+	if pol.Spec.MasterKeySecretRef.Namespace != "" && pol.Spec.MasterKeySecretRef.Namespace != gw.Namespace {
+		ok, err := MasterKeyReferenceGrantAllows(ctx, r.Client, gw, pol)
+		if err != nil {
+			return fmt.Errorf("ReferenceGrant check: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("ReferenceGrant missing for cross-NS master Secret %s/%s",
+				pol.Spec.MasterKeySecretRef.Namespace, pol.Spec.MasterKeySecretRef.Name)
+		}
+		role, err := BuildCrossNSMasterRole(gw, pol, r.Scheme)
+		if err != nil {
+			return err
+		}
+		if err := r.ensureHARole(ctx, role); err != nil {
+			return fmt.Errorf("cross-NS Role: %w", err)
+		}
+		rb, err := BuildCrossNSMasterRoleBinding(gw, pol, r.Scheme)
+		if err != nil {
+			return err
+		}
+		if err := r.ensureHARoleBinding(ctx, rb); err != nil {
+			return fmt.Errorf("cross-NS RoleBinding: %w", err)
+		}
+	}
+
 	var masterSec corev1.Secret
 	if err := r.Get(ctx, client.ObjectKey{Namespace: masterSecretNS, Name: pol.Spec.MasterKeySecretRef.Name}, &masterSec); err != nil {
 		return fmt.Errorf("get master Secret: %w", err)
