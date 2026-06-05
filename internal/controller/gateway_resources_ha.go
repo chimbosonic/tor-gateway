@@ -13,7 +13,6 @@ package controller
 import (
 	"crypto/rand"
 	"fmt"
-	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -167,22 +166,26 @@ func BuildBackendStatefulSet(
 			InitContainers: []corev1.Container{{
 				Name:  initContainerName,
 				Image: images.TorInit,
-				// TASK-5: replace with --api-fetch-secret-prefix=<gw>-backend- (tor-init derives the ordinal from POD_NAME)
 				Args: []string{
-					// Same subdirectory pattern as Mode A (see hsServiceDir):
-					// the volume mount root is root-owned, so tor-init operates
-					// on a subdir it creates itself (owned by 65532), allowing
-					// the subsequent chmod to succeed.
 					"--dst=" + hsServiceDir,
 					"--src=",
 					"--ob-master-address=" + master.String(),
+					fmt.Sprintf("--api-fetch-secret-prefix=%s-backend-", gw.Name),
 				},
-				Env: []corev1.EnvVar{{
-					Name: "POD_NAME",
-					ValueFrom: &corev1.EnvVarSource{
-						FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+				Env: []corev1.EnvVar{
+					{
+						Name: "POD_NAME",
+						ValueFrom: &corev1.EnvVarSource{
+							FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+						},
 					},
-				}},
+					{
+						Name: "POD_NAMESPACE",
+						ValueFrom: &corev1.EnvVarSource{
+							FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
+						},
+					},
+				},
 				VolumeMounts:    backendInitVolumeMounts(),
 				SecurityContext: haHardenedSecurityContext(),
 			}},
@@ -211,7 +214,7 @@ func BuildBackendStatefulSet(
 					SecurityContext: haHardenedSecurityContext(),
 				},
 			},
-			Volumes: backendPodVolumes(gw, replicas),
+			Volumes: backendPodVolumes(gw),
 			TopologySpreadConstraints: []corev1.TopologySpreadConstraint{{
 				MaxSkew:           1,
 				TopologyKey:       "kubernetes.io/hostname",
@@ -268,7 +271,6 @@ func BuildOnionbalanceConfigMap(gw *gwv1.Gateway, masterAddr tor.OnionAddress, s
 func backendInitVolumeMounts() []corev1.VolumeMount {
 	return []corev1.VolumeMount{
 		{Name: "hs", MountPath: hsDirMountPath},
-		{Name: "keys", MountPath: "/var/lib/tor-keys", ReadOnly: true},
 	}
 }
 
@@ -283,23 +285,10 @@ func backendTorVolumeMounts() []corev1.VolumeMount {
 	}
 }
 
-func backendPodVolumes(gw *gwv1.Gateway, replicas int32) []corev1.Volume {
-	sources := make([]corev1.VolumeProjection, 0, int(replicas))
-	for i := range replicas {
-		sources = append(sources, corev1.VolumeProjection{
-			Secret: &corev1.SecretProjection{
-				LocalObjectReference: corev1.LocalObjectReference{Name: BackendKeySecretName(gw, int(i))},
-				Items: []corev1.KeyToPath{
-					{Key: "hs_ed25519_secret_key", Path: strconv.Itoa(int(i)) + "/hs_ed25519_secret_key"},
-					{Key: "hs_ed25519_public_key", Path: strconv.Itoa(int(i)) + "/hs_ed25519_public_key"},
-				},
-			},
-		})
-	}
+func backendPodVolumes(gw *gwv1.Gateway) []corev1.Volume {
 	return []corev1.Volume{
 		{Name: "hs", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: dataVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		{Name: "keys", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: sources}}},
 		{Name: "torrc", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: BackendTorrcConfigMapName(gw)},
 		}}},

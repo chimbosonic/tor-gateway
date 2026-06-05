@@ -13,7 +13,6 @@ package controller
 import (
 	"crypto/rand"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -272,55 +271,78 @@ func TestBuildBackendStatefulSet_RouterSidecarPresent(t *testing.T) {
 	}
 }
 
-func TestBuildBackendStatefulSet_ProjectedVolumeHasReplicasSources(t *testing.T) {
+func TestBuildBackendStatefulSet_KeysVolumeAbsent(t *testing.T) {
 	scheme := testScheme(t)
 	gw := sampleStatefulSetGateway()
-	replicas := int32(3)
-	pol := samplePolicy(replicas)
+	pol := samplePolicy(3)
 	master := sampleMasterAddr(t)
 
 	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var keysVol *corev1.Volume
-	for i := range ss.Spec.Template.Spec.Volumes {
-		if ss.Spec.Template.Spec.Volumes[i].Name == "keys" {
-			keysVol = &ss.Spec.Template.Spec.Volumes[i]
-			break
+	for _, v := range ss.Spec.Template.Spec.Volumes {
+		if v.Name == "keys" {
+			t.Fatal("keys volume must not be present: keys are now API-fetched by tor-init")
 		}
 	}
-	if keysVol == nil || keysVol.Projected == nil {
-		t.Fatal("keys volume must be a Projected volume")
+}
+
+func TestBuildBackendStatefulSet_NoProjectedKeysVolume(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleStatefulSetGateway()
+	pol := samplePolicy(3)
+	master := sampleMasterAddr(t)
+
+	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
+	if err != nil {
+		t.Fatalf("build: %v", err)
 	}
-	if int32(len(keysVol.Projected.Sources)) != replicas {
-		t.Fatalf("projected volume has %d sources, want %d", len(keysVol.Projected.Sources), replicas)
+	for _, v := range ss.Spec.Template.Spec.Volumes {
+		if v.Name == "keys" {
+			t.Fatalf("backend pod still has 'keys' volume — should be API-fetched")
+		}
 	}
-	// Verify each source references the right secret name and per-index key paths.
-	for i := range replicas {
-		src := keysVol.Projected.Sources[i]
-		if src.Secret == nil {
-			t.Fatalf("source[%d] is not a Secret projection", i)
+}
+
+func TestBuildBackendStatefulSet_InitContainerUsesApiFetchPrefix(t *testing.T) {
+	scheme := testScheme(t)
+	gw := sampleStatefulSetGateway()
+	pol := samplePolicy(3)
+	master := sampleMasterAddr(t)
+
+	ss, err := BuildBackendStatefulSet(gw, pol, master, sampleImages(), scheme)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	init := ss.Spec.Template.Spec.InitContainers[0]
+	var prefixArg string
+	for _, a := range init.Args {
+		if strings.HasPrefix(a, "--api-fetch-secret-prefix=") {
+			prefixArg = a
 		}
-		want := BackendKeySecretName(gw, int(i))
-		if src.Secret.Name != want {
-			t.Fatalf("source[%d].Secret.Name = %q, want %q", i, src.Secret.Name, want)
+	}
+	if prefixArg == "" {
+		t.Fatal("init container missing --api-fetch-secret-prefix arg")
+	}
+	if !strings.Contains(prefixArg, "ha-gw-backend-") {
+		t.Errorf("prefix arg = %q, want substring 'ha-gw-backend-'", prefixArg)
+	}
+	// POD_NAME downward API
+	var sawPodName, sawPodNamespace bool
+	for _, e := range init.Env {
+		if e.Name == "POD_NAME" && e.ValueFrom != nil && e.ValueFrom.FieldRef != nil && e.ValueFrom.FieldRef.FieldPath == "metadata.name" {
+			sawPodName = true
 		}
-		items := src.Secret.Items
-		if len(items) != 2 {
-			t.Errorf("source[%d]: want 2 items, got %d", i, len(items))
-			continue
+		if e.Name == "POD_NAMESPACE" && e.ValueFrom != nil && e.ValueFrom.FieldRef != nil && e.ValueFrom.FieldRef.FieldPath == "metadata.namespace" {
+			sawPodNamespace = true
 		}
-		prefix := strconv.Itoa(int(i)) + "/"
-		expected := map[string]string{
-			"hs_ed25519_secret_key": prefix + "hs_ed25519_secret_key",
-			"hs_ed25519_public_key": prefix + "hs_ed25519_public_key",
-		}
-		for _, it := range items {
-			if expected[it.Key] != it.Path {
-				t.Errorf("source[%d] key %q: path %q != expected %q", i, it.Key, it.Path, expected[it.Key])
-			}
-		}
+	}
+	if !sawPodName {
+		t.Error("init container missing POD_NAME downward API env var")
+	}
+	if !sawPodNamespace {
+		t.Error("init container missing POD_NAMESPACE downward API env var")
 	}
 }
 
