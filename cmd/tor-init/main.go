@@ -69,12 +69,12 @@ func fetchSecretToDir(ctx context.Context, cs kubernetes.Interface, namespace, n
 
 func main() {
 	var (
-		src                   string
-		dst                   string
-		clientAuthSrc         string
-		obMasterAddress       string
-		apiFetchSecret        string
-		apiFetchSecretPrefix  string
+		src                  string
+		dst                  string
+		clientAuthSrc        string
+		obMasterAddress      string
+		apiFetchSecret       string
+		apiFetchSecretPrefix string
 	)
 	flag.StringVar(&src, "src", "/etc/tor-keys", "directory containing the mounted key Secret")
 	flag.StringVar(&dst, "dst", "/var/lib/tor/hs", "HiddenServiceDir to populate")
