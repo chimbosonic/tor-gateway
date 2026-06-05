@@ -193,8 +193,16 @@ func run(ctx context.Context, src, dst, clientAuthSrc, obMasterAddress, apiFetch
 		}
 	}
 
-	if err := tor.FixPermissions(dst); err != nil {
-		return err
+	// FixPermissions enforces tor's strict 0700 HiddenServiceDir requirement.
+	// Only invoke it when this run is populating a tor HS dir — not for
+	// pure --api-fetch-secret (master-fetch into onionbalance's keys
+	// emptyDir, where the mount root is owned by root and a non-root init
+	// container cannot chmod it).
+	torHSDirMode := src != "" || apiFetchSecretPrefix != "" || obMasterAddress != "" || clientAuthSrc != ""
+	if torHSDirMode {
+		if err := tor.FixPermissions(dst); err != nil {
+			return err
+		}
 	}
 
 	if obMasterAddress != "" {
