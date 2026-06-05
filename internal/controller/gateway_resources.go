@@ -412,18 +412,31 @@ func BuildServiceAccount(gw *gwv1.Gateway, scheme *runtime.Scheme) (*corev1.Serv
 
 // BuildRole emits the per-Gateway namespaced Role granting the router sidecar
 // read access to HTTPRoutes.
-func BuildRole(gw *gwv1.Gateway, scheme *runtime.Scheme) (*rbacv1.Role, error) {
+func BuildRole(gw *gwv1.Gateway, obp *policyv1alpha1.OnionBalancePolicy, scheme *runtime.Scheme) (*rbacv1.Role, error) {
+	rules := []rbacv1.PolicyRule{{
+		APIGroups: []string{"gateway.networking.k8s.io"},
+		Resources: []string{"httproutes"},
+		Verbs:     []string{"get", "list", "watch"},
+	}}
+	if obp != nil {
+		names := make([]string, 0, obp.Spec.Replicas)
+		for i := int32(0); i < obp.Spec.Replicas; i++ {
+			names = append(names, BackendKeySecretName(gw, int(i)))
+		}
+		rules = append(rules, rbacv1.PolicyRule{
+			APIGroups:     []string{""},
+			Resources:     []string{"secrets"},
+			Verbs:         []string{"get"},
+			ResourceNames: names,
+		})
+	}
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      RouterRBACName(gw.Name),
 			Namespace: gw.Namespace,
 			Labels:    ChildLabels(gw.Name),
 		},
-		Rules: []rbacv1.PolicyRule{{
-			APIGroups: []string{"gateway.networking.k8s.io"},
-			Resources: []string{"httproutes"},
-			Verbs:     []string{"get", "list", "watch"},
-		}},
+		Rules: rules,
 	}
 	if err := controllerutil.SetControllerReference(gw, role, scheme); err != nil {
 		return nil, err

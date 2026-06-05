@@ -173,7 +173,7 @@ func (r *GatewayReconciler) reconcileModeA(ctx context.Context, logger interface
 	}
 
 	// 3. Per-Gateway RBAC for the router sidecar (SA must exist before the pod).
-	if err := r.ensureRouterRBAC(ctx, gw); err != nil {
+	if err := r.ensureRouterRBAC(ctx, gw, nil); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -459,11 +459,11 @@ func (r *GatewayReconciler) ensureDeployment(
 	return current, nil
 }
 
-func (r *GatewayReconciler) ensureRouterRBAC(ctx context.Context, gw *gwv1.Gateway) error {
+func (r *GatewayReconciler) ensureRouterRBAC(ctx context.Context, gw *gwv1.Gateway, obp *policyv1alpha1.OnionBalancePolicy) error {
 	if err := r.ensureServiceAccount(ctx, gw); err != nil {
 		return fmt.Errorf("router ServiceAccount: %w", err)
 	}
-	if err := r.ensureRole(ctx, gw); err != nil {
+	if err := r.ensureRole(ctx, gw, obp); err != nil {
 		return fmt.Errorf("router Role: %w", err)
 	}
 	if err := r.ensureRoleBinding(ctx, gw); err != nil {
@@ -488,8 +488,8 @@ func (r *GatewayReconciler) ensureServiceAccount(ctx context.Context, gw *gwv1.G
 	return err
 }
 
-func (r *GatewayReconciler) ensureRole(ctx context.Context, gw *gwv1.Gateway) error {
-	desired, err := BuildRole(gw, r.Scheme)
+func (r *GatewayReconciler) ensureRole(ctx context.Context, gw *gwv1.Gateway, obp *policyv1alpha1.OnionBalancePolicy) error {
+	desired, err := BuildRole(gw, obp, r.Scheme)
 	if err != nil {
 		return err
 	}
@@ -684,7 +684,7 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 	// Backend pods run the same router sidecar as Mode A and reference the
 	// same per-Gateway router SA/Role/RoleBinding. Mode A's reconcile path
 	// creates them; in a fresh Mode B namespace they don't exist yet.
-	if err := r.ensureRouterRBAC(ctx, gw); err != nil {
+	if err := r.ensureRouterRBAC(ctx, gw, pol); err != nil {
 		return err
 	}
 

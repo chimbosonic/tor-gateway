@@ -434,7 +434,7 @@ func TestBuildServiceAccount_NameNamespaceOwner(t *testing.T) {
 func TestBuildRole_GrantsHTTPRouteRead(t *testing.T) {
 	scheme := testScheme(t)
 	gw := sampleGateway()
-	role, err := BuildRole(gw, scheme)
+	role, err := BuildRole(gw, nil, scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
