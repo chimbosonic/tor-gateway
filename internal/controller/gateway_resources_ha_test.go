@@ -935,6 +935,67 @@ func contains(slice []string, val string) bool {
 	return false
 }
 
+func TestBuildCrossNSMasterRole_ScopedToMasterSecret(t *testing.T) {
+	gw := sampleGateway()
+	gw.UID = "abc-123"
+	obp := samplePolicy(1)
+	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns"
+	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	role, err := BuildCrossNSMasterRole(gw, obp, testScheme(t))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if role.Namespace != "secrets-ns" {
+		t.Errorf("role namespace = %q, want secrets-ns", role.Namespace)
+	}
+	if len(role.Rules) != 1 {
+		t.Fatalf("rules len = %d, want 1", len(role.Rules))
+	}
+	if !reflect.DeepEqual(role.Rules[0].ResourceNames, []string{"ob-master"}) {
+		t.Errorf("resourceNames = %v, want [ob-master]", role.Rules[0].ResourceNames)
+	}
+	if role.Labels["torgateway.io/owner-uid"] != "abc-123" {
+		t.Errorf("owner-uid label missing")
+	}
+	if role.Labels["torgateway.io/gateway-ns"] != gw.Namespace {
+		t.Errorf("gateway-ns label = %q, want %q", role.Labels["torgateway.io/gateway-ns"], gw.Namespace)
+	}
+}
+
+func TestBuildCrossNSMasterRole_RejectsEmptyNamespace(t *testing.T) {
+	gw := sampleGateway()
+	obp := samplePolicy(1)
+	obp.Spec.MasterKeySecretRef.Namespace = "" // empty — should error
+	_, err := BuildCrossNSMasterRole(gw, obp, testScheme(t))
+	if err == nil {
+		t.Fatal("expected error for empty MasterKeySecretRef.Namespace")
+	}
+}
+
+func TestBuildCrossNSMasterRoleBinding_LinksFrontendSA(t *testing.T) {
+	gw := sampleGateway()
+	gw.UID = "abc-123"
+	obp := samplePolicy(1)
+	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns"
+	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	rb, err := BuildCrossNSMasterRoleBinding(gw, obp, testScheme(t))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if rb.Namespace != "secrets-ns" {
+		t.Errorf("rolebinding namespace = %q, want secrets-ns", rb.Namespace)
+	}
+	if len(rb.Subjects) != 1 ||
+		rb.Subjects[0].Kind != "ServiceAccount" ||
+		rb.Subjects[0].Namespace != gw.Namespace ||
+		rb.Subjects[0].Name != FrontendName(gw) {
+		t.Errorf("subjects = %+v, want frontend SA in gw NS", rb.Subjects)
+	}
+	if rb.RoleRef.Name != CrossNSMasterRoleName(gw) {
+		t.Errorf("roleRef.Name = %q, want %q", rb.RoleRef.Name, CrossNSMasterRoleName(gw))
+	}
+}
+
 func TestBuildFrontendRole_GetIsResourceNamesScoped(t *testing.T) {
 	gw := sampleGateway()
 	obp := samplePolicy(3)

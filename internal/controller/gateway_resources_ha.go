@@ -552,6 +552,69 @@ func BuildFrontendTorrcConfigMap(gw *gwv1.Gateway, testingNetworkInclude string,
 // (tor, onionbalance, obrefresh) then consume the keys read-only; obrefresh
 // writes the onionbalance config into the ob-config emptyDir and signals the
 // onionbalance process via the ob-run emptyDir pidfile.
+// CrossNSMasterRoleName returns the name used for the cross-NS Role + RoleBinding pair.
+func CrossNSMasterRoleName(gw *gwv1.Gateway) string {
+	return FrontendName(gw) + "-master-fetch"
+}
+
+// BuildCrossNSMasterRole emits a Role in pol.Spec.MasterKeySecretRef.Namespace
+// that allows `get` on exactly the named master Secret. The Role is NOT
+// controller-referenced (cross-namespace owner refs are invalid). The operator
+// GCs it on Gateway delete by label.
+func BuildCrossNSMasterRole(gw *gwv1.Gateway, pol *policyv1alpha1.OnionBalancePolicy, _ *runtime.Scheme) (*rbacv1.Role, error) {
+	if pol.Spec.MasterKeySecretRef.Namespace == "" {
+		return nil, fmt.Errorf("BuildCrossNSMasterRole: MasterKeySecretRef.Namespace empty")
+	}
+	return &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      CrossNSMasterRoleName(gw),
+			Namespace: pol.Spec.MasterKeySecretRef.Namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "tor-gateway",
+				gatewayLabelKey:                gw.Name,
+				"torgateway.io/owner-uid":      string(gw.UID),
+				"torgateway.io/gateway-ns":     gw.Namespace,
+			},
+		},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups:     []string{""},
+			Resources:     []string{"secrets"},
+			Verbs:         []string{"get"},
+			ResourceNames: []string{pol.Spec.MasterKeySecretRef.Name},
+		}},
+	}, nil
+}
+
+// BuildCrossNSMasterRoleBinding emits a RoleBinding in MasterKeySecretRef.Namespace
+// linking the frontend ServiceAccount (in gw.Namespace) to the cross-NS Role.
+func BuildCrossNSMasterRoleBinding(gw *gwv1.Gateway, pol *policyv1alpha1.OnionBalancePolicy, _ *runtime.Scheme) (*rbacv1.RoleBinding, error) {
+	if pol.Spec.MasterKeySecretRef.Namespace == "" {
+		return nil, fmt.Errorf("BuildCrossNSMasterRoleBinding: MasterKeySecretRef.Namespace empty")
+	}
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      CrossNSMasterRoleName(gw),
+			Namespace: pol.Spec.MasterKeySecretRef.Namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "tor-gateway",
+				gatewayLabelKey:                gw.Name,
+				"torgateway.io/owner-uid":      string(gw.UID),
+				"torgateway.io/gateway-ns":     gw.Namespace,
+			},
+		},
+		Subjects: []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      FrontendName(gw),
+			Namespace: gw.Namespace,
+		}},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     CrossNSMasterRoleName(gw),
+		},
+	}, nil
+}
+
 func BuildFrontendDeployment(
 	gw *gwv1.Gateway,
 	pol *policyv1alpha1.OnionBalancePolicy,
