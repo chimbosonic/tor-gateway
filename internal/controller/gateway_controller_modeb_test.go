@@ -18,6 +18,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -132,5 +133,25 @@ func TestEnsureModeB_CreatesCrossNSRoleBinding(t *testing.T) {
 	var role rbacv1.Role
 	if err := cl.Get(ctx, types.NamespacedName{Namespace: "secrets-ns", Name: CrossNSMasterRoleName(gw)}, &role); err != nil {
 		t.Fatalf("cross-NS Role not created: %v", err)
+	}
+}
+
+func TestCleanupModeBResources_DeletesOnionbalanceConfigMap(t *testing.T) {
+	ctx := context.Background()
+	gw := sampleGateway()
+	orphan := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      OnionbalanceConfigMapName(gw),
+			Namespace: gw.Namespace,
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(gw, orphan).Build()
+	r := &GatewayReconciler{Client: cl, Scheme: testScheme(t)}
+	if err := r.cleanupModeBResources(ctx, gw); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	err := cl.Get(ctx, types.NamespacedName{Namespace: gw.Namespace, Name: OnionbalanceConfigMapName(gw)}, &corev1.ConfigMap{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("expected NotFound, got %v", err)
 	}
 }

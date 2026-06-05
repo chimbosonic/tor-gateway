@@ -26,7 +26,6 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
-	obconfig "github.com/chimbosonic/tor-gateway/internal/onionbalance"
 	"github.com/chimbosonic/tor-gateway/internal/tor"
 )
 
@@ -241,31 +240,6 @@ func BuildBackendStatefulSet(
 		return nil, err
 	}
 	return ss, nil
-}
-
-// BuildOnionbalanceConfigMap renders the initial onionbalance config
-// ConfigMap with no backends. The frontend's obrefresh sidecar overwrites
-// the file on every backend Secret event; the ConfigMap exists so the
-// frontend pod has a non-empty file to read on first start.
-func BuildOnionbalanceConfigMap(gw *gwv1.Gateway, masterAddr tor.OnionAddress, scheme *runtime.Scheme) (*corev1.ConfigMap, error) {
-	rendered, err := obconfig.Render(masterAddr, nil, "/etc/onionbalance/keys/hs_ed25519_secret_key")
-	if err != nil {
-		return nil, err
-	}
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      OnionbalanceConfigMapName(gw),
-			Namespace: gw.Namespace,
-			Labels:    HALabels(gw, haRoleFrontend),
-		},
-		Data: map[string]string{
-			"config.yaml": rendered,
-		},
-	}
-	if err := controllerutil.SetControllerReference(gw, cm, scheme); err != nil {
-		return nil, err
-	}
-	return cm, nil
 }
 
 func backendInitVolumeMounts() []corev1.VolumeMount {

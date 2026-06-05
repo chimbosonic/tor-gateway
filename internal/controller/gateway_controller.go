@@ -651,14 +651,6 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 		return fmt.Errorf("backend headless Service: %w", err)
 	}
 
-	cm, err := BuildOnionbalanceConfigMap(gw, master, r.Scheme)
-	if err != nil {
-		return err
-	}
-	if err := r.ensureHAConfigMap(ctx, cm); err != nil {
-		return fmt.Errorf("onionbalance ConfigMap: %w", err)
-	}
-
 	sa, err := BuildFrontendServiceAccount(gw, r.Scheme)
 	if err != nil {
 		return err

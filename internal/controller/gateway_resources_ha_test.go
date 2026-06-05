@@ -444,60 +444,6 @@ func TestBuildBackendStatefulSet_Hardening(t *testing.T) {
 	}
 }
 
-// --- BuildOnionbalanceConfigMap ---
-
-func TestBuildOnionbalanceConfigMap_ContainsServicesAndEmptyInstances(t *testing.T) {
-	scheme := testScheme(t)
-	gw := sampleGateway()
-	master := sampleMasterAddr(t)
-
-	cm, err := BuildOnionbalanceConfigMap(gw, master, scheme)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cm.Name != OnionbalanceConfigMapName(gw) {
-		t.Fatalf("name = %q, want %q", cm.Name, OnionbalanceConfigMapName(gw))
-	}
-	data, ok := cm.Data["config.yaml"]
-	if !ok {
-		t.Fatal("ConfigMap missing data[config.yaml]")
-	}
-	if !strings.Contains(data, "services:") {
-		t.Fatalf("config.yaml missing 'services:' key; got:\n%s", data)
-	}
-	if !strings.Contains(data, "instances: []") {
-		t.Fatalf("config.yaml missing 'instances: []' for zero backends; got:\n%s", data)
-	}
-}
-
-func TestBuildOnionbalanceConfigMap_OwnerReference(t *testing.T) {
-	scheme := testScheme(t)
-	gw := sampleGateway()
-	master := sampleMasterAddr(t)
-
-	cm, err := BuildOnionbalanceConfigMap(gw, master, scheme)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cm.OwnerReferences) != 1 || cm.OwnerReferences[0].UID != gw.UID {
-		t.Fatalf("expected Gateway owner ref, got %+v", cm.OwnerReferences)
-	}
-}
-
-func TestBuildOnionbalanceConfigMap_LabelsFrontend(t *testing.T) {
-	scheme := testScheme(t)
-	gw := sampleGateway()
-	master := sampleMasterAddr(t)
-
-	cm, err := BuildOnionbalanceConfigMap(gw, master, scheme)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cm.Labels[haRoleKey] != haRoleFrontend {
-		t.Fatalf("label %s = %q, want frontend", haRoleKey, cm.Labels[haRoleKey])
-	}
-}
-
 // --- HALabels ---
 
 func TestHALabels_ContainsGatewayAndRole(t *testing.T) {
