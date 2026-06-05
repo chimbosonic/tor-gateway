@@ -217,11 +217,6 @@ func TestBuildBackendStatefulSet_InitContainerArgs(t *testing.T) {
 		t.Fatalf("init container args missing --ob-master-address; got %v", args)
 	}
 
-	// Must include per-pod-keys-base flag.
-	if !slices.Contains(args, "--per-pod-keys-base=/var/lib/tor-keys") {
-		t.Fatalf("init container args missing --per-pod-keys-base; got %v", args)
-	}
-
 	// Must pass --src= explicitly (empty value), which tells tor-init to
 	// skip the Mode A key-Secret copy. Without the flag, tor-init would
 	// fall back to the default "/etc/tor-keys" and either crash (path

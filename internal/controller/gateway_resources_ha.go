@@ -156,15 +156,15 @@ func BuildBackendStatefulSet(
 			InitContainers: []corev1.Container{{
 				Name:  initContainerName,
 				Image: images.TorInit,
+				// TASK-5: replace with --api-fetch-secret-prefix=<gw>-backend- (tor-init derives the ordinal from POD_NAME)
 				Args: []string{
 					// Same subdirectory pattern as Mode A (see hsServiceDir):
 					// the volume mount root is root-owned, so tor-init operates
 					// on a subdir it creates itself (owned by 65532), allowing
 					// the subsequent chmod to succeed.
 					"--dst=" + hsServiceDir,
-					"--src=", // skip the Mode A key-Secret copy; --per-pod-keys-base supplies the keys
+					"--src=",
 					"--ob-master-address=" + master.String(),
-					"--per-pod-keys-base=/var/lib/tor-keys",
 				},
 				Env: []corev1.EnvVar{{
 					Name: "POD_NAME",

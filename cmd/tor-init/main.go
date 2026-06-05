@@ -63,7 +63,6 @@ func main() {
 		dst             string
 		clientAuthSrc   string
 		obMasterAddress string
-		perPodKeysBase  string
 		apiFetchSecret  string
 	)
 	flag.StringVar(&src, "src", "/etc/tor-keys", "directory containing the mounted key Secret")
@@ -74,9 +73,6 @@ func main() {
 			"<dst>/authorized_clients/")
 	flag.StringVar(&obMasterAddress, "ob-master-address", "",
 		"if set, write <HSDir>/ob_config containing MasterOnionAddress <value>.onion (HA backend mode)")
-	flag.StringVar(&perPodKeysBase, "per-pod-keys-base", "",
-		"if set, copy hs_ed25519_*_key from <base>/<index>/ into HSDir; "+
-			"<index> is the trailing -N of $POD_NAME (HA backend mode)")
 	flag.StringVar(&apiFetchSecret, "api-fetch-secret", "",
 		"if set (NAMESPACE/NAME), fetch the named Secret via the in-cluster API and "+
 			"write its data entries into <dst>")
@@ -85,17 +81,16 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	if err := run(context.Background(), src, dst, clientAuthSrc, perPodKeysBase, obMasterAddress, apiFetchSecret); err != nil {
+	if err := run(context.Background(), src, dst, clientAuthSrc, obMasterAddress, apiFetchSecret); err != nil {
 		slog.Error("tor-init failed", "err", err)
 		os.Exit(1)
 	}
 	slog.Info("tor-init ok", "src", src, "dst", dst,
 		"client_auth", clientAuthSrc != "",
-		"per_pod_keys", perPodKeysBase != "",
 		"ob_master", obMasterAddress != "")
 }
 
-func run(ctx context.Context, src, dst, clientAuthSrc, perPodKeysBase, obMasterAddress, apiFetchSecret string) error {
+func run(ctx context.Context, src, dst, clientAuthSrc, obMasterAddress, apiFetchSecret string) error {
 	if err := os.MkdirAll(dst, tor.HiddenServiceDirMode); err != nil {
 		return err
 	}
@@ -119,19 +114,6 @@ func run(ctx context.Context, src, dst, clientAuthSrc, perPodKeysBase, obMasterA
 		slog.Info("tor-init: api-fetched secret", "ref", apiFetchSecret)
 	}
 
-	if perPodKeysBase != "" {
-		podName := os.Getenv("POD_NAME")
-		if podName == "" {
-			return fmt.Errorf("--per-pod-keys-base requires POD_NAME env var")
-		}
-		if err := copyPerPodKeys(perPodKeysBase, podName, dst); err != nil {
-			return fmt.Errorf("per-pod-keys: %w", err)
-		}
-		slog.Info("tor-init: per-pod keys copied", "pod", podName, "base", perPodKeysBase)
-	}
-
-	// HA backends pass --src="" because --per-pod-keys-base supplies the
-	// keys; in that case there's no Mode A key-Secret to walk.
 	if src != "" {
 		entries, err := os.ReadDir(src)
 		if err != nil {
@@ -194,25 +176,6 @@ func writeObConfig(hsDir, addr string) error {
 	}
 	obConfigPath := filepath.Join(hsDir, "ob_config")
 	return os.WriteFile(obConfigPath, []byte("MasterOnionAddress "+addr+"\n"), 0o400)
-}
-
-func copyPerPodKeys(base, podName, hsDir string) error {
-	dash := strings.LastIndexByte(podName, '-')
-	if dash < 0 {
-		return fmt.Errorf("POD_NAME %q has no trailing -N", podName)
-	}
-	idx := podName[dash+1:]
-	src := filepath.Join(base, idx)
-	for _, name := range []string{"hs_ed25519_secret_key", "hs_ed25519_public_key"} {
-		data, err := os.ReadFile(filepath.Join(src, name))
-		if err != nil {
-			return fmt.Errorf("read %s: %w", name, err)
-		}
-		if err := os.WriteFile(filepath.Join(hsDir, name), data, 0o600); err != nil {
-			return fmt.Errorf("write %s: %w", name, err)
-		}
-	}
-	return nil
 }
 
 func copyFile(srcPath, dstPath string) error {

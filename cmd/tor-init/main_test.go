@@ -48,7 +48,7 @@ func TestRun_CopiesSecretMountSkippingDataSymlink(t *testing.T) {
 	src := makeSecretMount(t, want)
 	dst := filepath.Join(t.TempDir(), "hs")
 
-	if err := run(context.Background(), src, dst, "", "", "", ""); err != nil {
+	if err := run(context.Background(), src, dst, "", "", ""); err != nil {
 		t.Fatalf("run() returned error: %v", err)
 	}
 
@@ -101,36 +101,6 @@ func TestWriteObConfig(t *testing.T) {
 			t.Errorf("want 0400, got %#o", mode)
 		}
 	})
-}
-
-func TestCopyPerPodKeys(t *testing.T) {
-	base := t.TempDir()
-	hsDir := t.TempDir()
-	idxDir := filepath.Join(base, "2")
-	if err := os.MkdirAll(idxDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(idxDir, "hs_ed25519_secret_key"), []byte("S"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(idxDir, "hs_ed25519_public_key"), []byte("P"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := copyPerPodKeys(base, "blog-backend-2", hsDir); err != nil {
-		t.Fatalf("copyPerPodKeys: %v", err)
-	}
-	for name, want := range map[string]string{"hs_ed25519_secret_key": "S", "hs_ed25519_public_key": "P"} {
-		got, _ := os.ReadFile(filepath.Join(hsDir, name))
-		if string(got) != want {
-			t.Errorf("%s: got %q want %q", name, got, want)
-		}
-	}
-}
-
-func TestCopyPerPodKeysRejectsBadPodName(t *testing.T) {
-	if err := copyPerPodKeys(t.TempDir(), "noDash", t.TempDir()); err == nil {
-		t.Error("expected error on pod name with no trailing -N")
-	}
 }
 
 func TestApiFetchSecret_WritesKeyFilesAndHostname(t *testing.T) {
