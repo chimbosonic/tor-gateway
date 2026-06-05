@@ -7,9 +7,6 @@ name: E2E Tests
 on:
   push:
     branches: [main]
-  schedule:
-    # Daily at 03:17 UTC.
-    - cron: "17 3 * * *"
   workflow_dispatch: {}
 
 permissions: {}
