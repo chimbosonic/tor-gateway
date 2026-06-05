@@ -12,7 +12,9 @@ package controller
 
 import (
 	"crypto/rand"
+	"reflect"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -534,25 +536,37 @@ func TestBuildFrontendServiceAccount(t *testing.T) {
 func TestBuildFrontendRole(t *testing.T) {
 	gw := sampleGateway()
 	scheme := testScheme(t)
-	role, err := BuildFrontendRole(gw, scheme)
+	pol := samplePolicy(2)
+	role, err := BuildFrontendRole(gw, pol, scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(role.Rules) != 1 {
-		t.Fatalf("expected 1 rule, got %d", len(role.Rules))
+	if len(role.Rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(role.Rules))
 	}
-	r := role.Rules[0]
-	if len(r.Resources) != 1 || r.Resources[0] != "secrets" {
-		t.Errorf("expected only secrets; got %v", r.Resources)
-	}
-	wantVerbs := map[string]bool{"get": true, "list": true, "watch": true}
-	for _, v := range r.Verbs {
-		if !wantVerbs[v] {
-			t.Errorf("unexpected verb %q (only get/list/watch allowed)", v)
+	var sawGet, sawListWatch bool
+	for _, r := range role.Rules {
+		if len(r.Resources) != 1 || r.Resources[0] != "secrets" {
+			t.Errorf("expected only secrets; got %v", r.Resources)
+		}
+		if len(r.Verbs) == 1 && r.Verbs[0] == "get" {
+			sawGet = true
+			if len(r.ResourceNames) == 0 {
+				t.Error("get rule must have resourceNames")
+			}
+		}
+		if contains(r.Verbs, "list") && contains(r.Verbs, "watch") {
+			sawListWatch = true
+			if len(r.ResourceNames) != 0 {
+				t.Errorf("list/watch rule must not have resourceNames; got %v", r.ResourceNames)
+			}
 		}
 	}
-	if len(r.Verbs) != 3 {
-		t.Errorf("expected 3 verbs (get/list/watch), got %d: %v", len(r.Verbs), r.Verbs)
+	if !sawGet {
+		t.Error("missing get rule")
+	}
+	if !sawListWatch {
+		t.Error("missing list/watch rule")
 	}
 }
 
@@ -908,5 +922,76 @@ func TestBuildBackendTorrcConfigMap_PropagatesTestingNetworkInclude(t *testing.T
 	// Backend torrc MUST still contain the onionbalance instance directive.
 	if !strings.Contains(rendered, "HiddenServiceOnionbalanceInstance 1") {
 		t.Errorf("backend torrc lost HiddenServiceOnionbalanceInstance 1:\n%s", rendered)
+	}
+}
+
+// contains reports whether val appears in slice.
+func contains(slice []string, val string) bool {
+	for _, s := range slice {
+		if s == val {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuildFrontendRole_GetIsResourceNamesScoped(t *testing.T) {
+	gw := sampleGateway()
+	obp := samplePolicy(3)
+	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	obp.Spec.MasterKeySecretRef.Namespace = "" // same NS
+	role, err := BuildFrontendRole(gw, obp, testScheme(t))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	var gotGet, gotListWatch bool
+	for _, r := range role.Rules {
+		switch {
+		case len(r.Verbs) == 1 && r.Verbs[0] == "get":
+			gotGet = true
+			wantNames := []string{
+				BackendKeySecretName(gw, 0),
+				BackendKeySecretName(gw, 1),
+				BackendKeySecretName(gw, 2),
+				"ob-master",
+			}
+			gotNames := append([]string(nil), r.ResourceNames...)
+			sort.Strings(gotNames)
+			sort.Strings(wantNames)
+			if !reflect.DeepEqual(gotNames, wantNames) {
+				t.Errorf("get resourceNames = %v, want %v", gotNames, wantNames)
+			}
+		case len(r.Verbs) == 2 && contains(r.Verbs, "list") && contains(r.Verbs, "watch"):
+			gotListWatch = true
+			if len(r.ResourceNames) != 0 {
+				t.Errorf("list/watch rule must not have resourceNames; got %v", r.ResourceNames)
+			}
+		}
+	}
+	if !gotGet {
+		t.Error("missing get rule")
+	}
+	if !gotListWatch {
+		t.Error("missing list/watch rule")
+	}
+}
+
+func TestBuildFrontendRole_CrossNSMasterOmitsFromInNSResourceNames(t *testing.T) {
+	gw := sampleGateway()
+	obp := samplePolicy(2)
+	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns" // different from gw.Namespace
+	role, err := BuildFrontendRole(gw, obp, testScheme(t))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	for _, r := range role.Rules {
+		if len(r.Verbs) == 1 && r.Verbs[0] == "get" {
+			for _, n := range r.ResourceNames {
+				if n == "ob-master" {
+					t.Fatalf("cross-NS master should NOT be in in-namespace get resourceNames; got %v", r.ResourceNames)
+				}
+			}
+		}
 	}
 }

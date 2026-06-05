@@ -641,7 +641,7 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 		return fmt.Errorf("frontend ServiceAccount: %w", err)
 	}
 
-	role, err := BuildFrontendRole(gw, r.Scheme)
+	role, err := BuildFrontendRole(gw, pol, r.Scheme)
 	if err != nil {
 		return err
 	}

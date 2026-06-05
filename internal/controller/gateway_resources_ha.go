@@ -423,20 +423,39 @@ func BuildFrontendServiceAccount(gw *gwv1.Gateway, scheme *runtime.Scheme) (*cor
 }
 
 // BuildFrontendRole emits the per-Gateway Role granting the frontend pod
-// read-only access to Secrets (obrefresh needs the backend key Secrets to
-// build the onionbalance config).
-func BuildFrontendRole(gw *gwv1.Gateway, scheme *runtime.Scheme) (*rbacv1.Role, error) {
+// read-only access to Secrets. The get verb is scoped to the specific backend
+// key Secrets (and the in-namespace master Secret when applicable) via
+// resourceNames. list/watch must remain namespace-wide due to RBAC limitations;
+// the informer's label-selector narrows what is actually observed in code.
+func BuildFrontendRole(gw *gwv1.Gateway, pol *policyv1alpha1.OnionBalancePolicy, scheme *runtime.Scheme) (*rbacv1.Role, error) {
+	backendNames := make([]string, 0, pol.Spec.Replicas+1)
+	for i := int32(0); i < pol.Spec.Replicas; i++ {
+		backendNames = append(backendNames, BackendKeySecretName(gw, int(i)))
+	}
+	masterNS := pol.Spec.MasterKeySecretRef.Namespace
+	if masterNS == "" || masterNS == gw.Namespace {
+		backendNames = append(backendNames, pol.Spec.MasterKeySecretRef.Name)
+	}
+
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      FrontendName(gw),
 			Namespace: gw.Namespace,
 			Labels:    HALabels(gw, haRoleFrontend),
 		},
-		Rules: []rbacv1.PolicyRule{{
-			APIGroups: []string{""},
-			Resources: []string{"secrets"},
-			Verbs:     []string{"get", "list", "watch"},
-		}},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups:     []string{""},
+				Resources:     []string{"secrets"},
+				Verbs:         []string{"get"},
+				ResourceNames: backendNames,
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"secrets"},
+				Verbs:     []string{"list", "watch"},
+			},
+		},
 	}
 	if err := controllerutil.SetControllerReference(gw, role, scheme); err != nil {
 		return nil, err
