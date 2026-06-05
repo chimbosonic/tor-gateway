@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -153,5 +155,29 @@ func TestApiFetchSecret_WritesKeyFilesAndHostname(t *testing.T) {
 		if len(b) == 0 {
 			t.Fatalf("%s empty", name)
 		}
+	}
+}
+
+func TestApiFetchSecret_BadFlagFormat(t *testing.T) {
+	dst := t.TempDir()
+	cs := fake.NewSimpleClientset()
+	err := fetchSecretToDir(context.Background(), cs, "", "name", dst)
+	if err == nil {
+		t.Fatal("expected error for empty namespace")
+	}
+	if !strings.Contains(err.Error(), "namespace and name must be non-empty") {
+		t.Fatalf("expected guard error, got: %v", err)
+	}
+}
+
+func TestApiFetchSecret_NotFound(t *testing.T) {
+	dst := t.TempDir()
+	cs := fake.NewSimpleClientset() // no Secrets
+	err := fetchSecretToDir(context.Background(), cs, "default", "missing", dst)
+	if err == nil {
+		t.Fatal("expected not-found error")
+	}
+	if !apierrors.IsNotFound(err) && !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not-found, got: %v", err)
 	}
 }

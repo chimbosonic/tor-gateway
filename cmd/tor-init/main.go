@@ -39,6 +39,9 @@ import (
 // fetchSecretToDir GETs the named Secret and writes each of its data
 // entries as a file under dst, preserving the entry names verbatim.
 func fetchSecretToDir(ctx context.Context, cs kubernetes.Interface, namespace, name, dst string) error {
+	if namespace == "" || name == "" {
+		return fmt.Errorf("namespace and name must be non-empty, got %q/%q", namespace, name)
+	}
 	s, err := cs.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("get secret %s/%s: %w", namespace, name, err)
