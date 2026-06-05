@@ -36,6 +36,16 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+// podOrdinal extracts the trailing -N suffix from a StatefulSet pod name.
+// Returns an error if no trailing -N is present or if the ordinal is empty.
+func podOrdinal(podName string) (string, error) {
+	dash := strings.LastIndexByte(podName, '-')
+	if dash < 0 || dash == len(podName)-1 {
+		return "", fmt.Errorf("POD_NAME %q has no trailing -N", podName)
+	}
+	return podName[dash+1:], nil
+}
+
 // fetchSecretToDir GETs the named Secret and writes each of its data
 // entries as a file under dst, preserving the entry names verbatim.
 func fetchSecretToDir(ctx context.Context, cs kubernetes.Interface, namespace, name, dst string) error {
@@ -59,11 +69,12 @@ func fetchSecretToDir(ctx context.Context, cs kubernetes.Interface, namespace, n
 
 func main() {
 	var (
-		src             string
-		dst             string
-		clientAuthSrc   string
-		obMasterAddress string
-		apiFetchSecret  string
+		src                   string
+		dst                   string
+		clientAuthSrc         string
+		obMasterAddress       string
+		apiFetchSecret        string
+		apiFetchSecretPrefix  string
 	)
 	flag.StringVar(&src, "src", "/etc/tor-keys", "directory containing the mounted key Secret")
 	flag.StringVar(&dst, "dst", "/var/lib/tor/hs", "HiddenServiceDir to populate")
@@ -76,12 +87,14 @@ func main() {
 	flag.StringVar(&apiFetchSecret, "api-fetch-secret", "",
 		"if set (NAMESPACE/NAME), fetch the named Secret via the in-cluster API and "+
 			"write its data entries into <dst>")
+	flag.StringVar(&apiFetchSecretPrefix, "api-fetch-secret-prefix", "",
+		"if set, fetch <prefix><POD_ORDINAL>-keys from POD_NAMESPACE via the in-cluster API")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	if err := run(context.Background(), src, dst, clientAuthSrc, obMasterAddress, apiFetchSecret); err != nil {
+	if err := run(context.Background(), src, dst, clientAuthSrc, obMasterAddress, apiFetchSecret, apiFetchSecretPrefix); err != nil {
 		slog.Error("tor-init failed", "err", err)
 		os.Exit(1)
 	}
@@ -90,7 +103,7 @@ func main() {
 		"ob_master", obMasterAddress != "")
 }
 
-func run(ctx context.Context, src, dst, clientAuthSrc, obMasterAddress, apiFetchSecret string) error {
+func run(ctx context.Context, src, dst, clientAuthSrc, obMasterAddress, apiFetchSecret, apiFetchSecretPrefix string) error {
 	if err := os.MkdirAll(dst, tor.HiddenServiceDirMode); err != nil {
 		return err
 	}
@@ -112,6 +125,31 @@ func run(ctx context.Context, src, dst, clientAuthSrc, obMasterAddress, apiFetch
 			return fmt.Errorf("api-fetch: %w", err)
 		}
 		slog.Info("tor-init: api-fetched secret", "ref", apiFetchSecret)
+	}
+
+	if apiFetchSecretPrefix != "" {
+		podName := os.Getenv("POD_NAME")
+		podNamespace := os.Getenv("POD_NAMESPACE")
+		if podName == "" || podNamespace == "" {
+			return fmt.Errorf("--api-fetch-secret-prefix requires POD_NAME and POD_NAMESPACE env vars")
+		}
+		ord, err := podOrdinal(podName)
+		if err != nil {
+			return err
+		}
+		name := apiFetchSecretPrefix + ord + "-keys"
+		cfg, err := rest.InClusterConfig()
+		if err != nil {
+			return fmt.Errorf("in-cluster config: %w", err)
+		}
+		cs, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			return fmt.Errorf("kubernetes client: %w", err)
+		}
+		if err := fetchSecretToDir(ctx, cs, podNamespace, name, dst); err != nil {
+			return fmt.Errorf("api-fetch-prefix: %w", err)
+		}
+		slog.Info("tor-init: api-fetched per-pod secret", "name", name)
 	}
 
 	if src != "" {

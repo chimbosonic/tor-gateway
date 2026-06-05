@@ -48,7 +48,7 @@ func TestRun_CopiesSecretMountSkippingDataSymlink(t *testing.T) {
 	src := makeSecretMount(t, want)
 	dst := filepath.Join(t.TempDir(), "hs")
 
-	if err := run(context.Background(), src, dst, "", "", ""); err != nil {
+	if err := run(context.Background(), src, dst, "", "", "", ""); err != nil {
 		t.Fatalf("run() returned error: %v", err)
 	}
 
@@ -149,5 +149,26 @@ func TestApiFetchSecret_NotFound(t *testing.T) {
 	}
 	if !apierrors.IsNotFound(err) && !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not-found, got: %v", err)
+	}
+}
+
+func TestPodOrdinal(t *testing.T) {
+	cases := []struct {
+		in, want string
+		wantErr  bool
+	}{
+		{"blog-backend-0", "0", false},
+		{"blog-backend-7", "7", false},
+		{"no-trailing-", "", true},
+		{"single", "", true},
+	}
+	for _, c := range cases {
+		got, err := podOrdinal(c.in)
+		if (err != nil) != c.wantErr {
+			t.Errorf("%q: err=%v wantErr=%v", c.in, err, c.wantErr)
+		}
+		if got != c.want {
+			t.Errorf("%q: got %q want %q", c.in, got, c.want)
+		}
 	}
 }
