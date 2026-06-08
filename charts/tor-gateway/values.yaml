@@ -80,8 +80,8 @@ torRuntime:
     tag: "0.4.9"
     pullPolicy: IfNotPresent
   onionbalanceImage:
-    repository: ghcr.io/chimbosonic/onionbalance
-    tag: "0.2-latest"
+    repository: ghcr.io/chimbosonic/tor-gateway-onionbalance
+    tag: ""
     pullPolicy: IfNotPresent
 
 # GatewayClass managed by this operator. Set install=false if you want to
