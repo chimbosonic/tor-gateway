@@ -1105,10 +1105,14 @@ func (r *GatewayReconciler) cleanupModeBResources(ctx context.Context, gw *gwv1.
 			return err
 		}
 	}
-	if gw.Annotations != nil {
-		delete(gw.Annotations, "torgateway.io/pow-override-emitted")
+	_, hasReplicas := gw.Annotations["torgateway.io/last-known-replicas"]
+	_, hasPowEmitted := gw.Annotations["torgateway.io/pow-override-emitted"]
+	if hasReplicas || hasPowEmitted {
 		delete(gw.Annotations, "torgateway.io/last-known-replicas")
-		_ = r.Update(ctx, gw)
+		delete(gw.Annotations, "torgateway.io/pow-override-emitted")
+		if err := r.Update(ctx, gw); err != nil {
+			return fmt.Errorf("cleanupModeBResources: clear annotations: %w", err)
+		}
 	}
 	return nil
 }

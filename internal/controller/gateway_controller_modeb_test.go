@@ -462,6 +462,59 @@ func makeAcceptedFor(gw *gwv1.Gateway) policyv1alpha1.OnionBalancePolicyStatus {
 	}
 }
 
+// --- cleanupModeBResources annotation gate tests ---
+
+func TestCleanupModeBResources_NoUpdateWhenAnnotationsAbsent(t *testing.T) {
+	gw := sampleGateway()
+	gw.Annotations = map[string]string{"unrelated": "value"}
+	cl := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(gw).Build()
+	// Read the stored object to get the RV the fake client assigned.
+	var stored gwv1.Gateway
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &stored); err != nil {
+		t.Fatalf("pre-get: %v", err)
+	}
+	rv := stored.ResourceVersion
+	r := &GatewayReconciler{Client: cl, Scheme: testScheme(t)}
+	if err := r.cleanupModeBResources(context.Background(), &stored); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	var got gwv1.Gateway
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ResourceVersion != rv {
+		t.Errorf("ResourceVersion changed (%s -> %s); cleanup should not Update when no HA annotations present", rv, got.ResourceVersion)
+	}
+}
+
+func TestCleanupModeBResources_UpdatesWhenHAAnnotationsPresent(t *testing.T) {
+	gw := sampleGateway()
+	gw.Annotations = map[string]string{
+		"torgateway.io/last-known-replicas": "3",
+	}
+	cl := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(gw).Build()
+	// Read the stored object to get the RV the fake client assigned.
+	var stored gwv1.Gateway
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &stored); err != nil {
+		t.Fatalf("pre-get: %v", err)
+	}
+	rv := stored.ResourceVersion
+	r := &GatewayReconciler{Client: cl, Scheme: testScheme(t)}
+	if err := r.cleanupModeBResources(context.Background(), &stored); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	var got gwv1.Gateway
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ResourceVersion == rv {
+		t.Error("ResourceVersion unchanged; cleanup should Update when HA annotations are present")
+	}
+	if _, ok := got.Annotations["torgateway.io/last-known-replicas"]; ok {
+		t.Error("torgateway.io/last-known-replicas annotation should have been removed")
+	}
+}
+
 // --- findEffectiveOnionBalance tests ---
 
 func TestFindEffectiveOnionBalance_LexicalTiebreak(t *testing.T) {
