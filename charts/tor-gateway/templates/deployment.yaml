@@ -43,10 +43,10 @@ spec:
             - --cluster-pod-cidrs={{ join "," . }}
             {{- end }}
             {{- if .Values.testingTorNetwork.enabled }}
+            {{- $ns := required "testingTorNetwork.podNamespace is required when testingTorNetwork.enabled=true" .Values.testingTorNetwork.podNamespace }}
+            {{- $cm := required "testingTorNetwork.configMapName is required when testingTorNetwork.enabled=true" .Values.testingTorNetwork.configMapName }}
             - --testing-tor-network-file=/etc/tor-gateway/testing-network/fragment
-            {{- with .Values.testingTorNetwork.podNamespace }}
-            - --testing-tor-network-namespace={{ . }}
-            {{- end }}
+            - --testing-tor-network-namespace={{ $ns }}
             {{- end }}
           ports:
             - name: health
