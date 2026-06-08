@@ -13,6 +13,7 @@ package controller
 import (
 	"context"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -269,6 +270,7 @@ var _ = Describe("Gateway reconciler", func() {
 					Name:  gwv1.ObjectName(gw.Name),
 				}},
 				Replicas:           1,
+				RefreshInterval:    metav1.Duration{Duration: 30 * time.Second},
 				MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "obp-watch-master"},
 			},
 		}
@@ -332,6 +334,7 @@ var _ = Describe("Gateway reconciler", func() {
 						Name:  gwv1.ObjectName(gw.Name),
 					}},
 					Replicas:           2,
+					RefreshInterval:    metav1.Duration{Duration: 30 * time.Second},
 					MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: masterSec.Name},
 				},
 			}
@@ -376,6 +379,7 @@ var _ = Describe("Gateway reconciler", func() {
 						Name:  gwv1.ObjectName(gw.Name),
 					}},
 					Replicas:           2,
+					RefreshInterval:    metav1.Duration{Duration: 30 * time.Second},
 					MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: masterSec.Name},
 				},
 			}
@@ -424,6 +428,7 @@ var _ = Describe("Gateway reconciler", func() {
 						Name:  gwv1.ObjectName(gw.Name),
 					}},
 					Replicas:           1,
+					RefreshInterval:    metav1.Duration{Duration: 30 * time.Second},
 					MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: masterSec.Name},
 				},
 			}
@@ -453,6 +458,7 @@ var _ = Describe("Gateway reconciler", func() {
 						Name:  gwv1.ObjectName(gw.Name),
 					}},
 					Replicas:           1,
+					RefreshInterval:    metav1.Duration{Duration: 30 * time.Second},
 					MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "ha-notaccepted-no-such-secret"},
 				},
 			}

@@ -100,6 +100,11 @@ func NewRefresher(_ context.Context, cfg RefresherConfig) (*Refresher, error) {
 	if cfg.Interval <= 0 {
 		cfg.Interval = 30 * time.Second
 	}
+	const minInterval = 5 * time.Second
+	if cfg.Interval < minInterval {
+		slog.Warn("refresher: clamping interval to minimum", "got", cfg.Interval, "min", minInterval)
+		cfg.Interval = minInterval
+	}
 	return &Refresher{cfg: cfg}, nil
 }
 

@@ -136,6 +136,32 @@ func TestRefresherRequiresMandatoryFields(t *testing.T) {
 	}
 }
 
+func TestNewRefresher_ClampsTooShortInterval(t *testing.T) {
+	master := mustKeyPair(t).OnionAddress()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	pidPath := filepath.Join(dir, "pid")
+
+	cfg := RefresherConfig{
+		GatewayName:      "blog",
+		GatewayNamespace: "prod",
+		MasterKeyPath:    "/etc/onionbalance/keys/hs_ed25519_secret_key",
+		ConfigPath:       cfgPath,
+		PIDFile:          pidPath,
+		Interval:         1 * time.Millisecond,
+		Master:           master,
+		OwnerUID:         testGatewayUID,
+		Client:           fake.NewClientset(),
+	}
+	r, err := NewRefresher(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewRefresher: %v", err)
+	}
+	if r.cfg.Interval < 5*time.Second {
+		t.Errorf("interval not clamped; got %v", r.cfg.Interval)
+	}
+}
+
 func TestBackendsFromSecrets_FilterByOwnerUID(t *testing.T) {
 	legitAddr := mustKeyPair(t).OnionAddress()
 	impostorAddr := mustKeyPair(t).OnionAddress()

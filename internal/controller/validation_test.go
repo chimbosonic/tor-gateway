@@ -18,6 +18,7 @@ package controller
 
 import (
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -185,8 +186,9 @@ var _ = Describe("CRD validation", func() {
 			return &policyv1alpha1.OnionBalancePolicy{
 				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 				Spec: policyv1alpha1.OnionBalancePolicySpec{
-					TargetRefs: validGatewayTarget(),
-					Replicas:   3,
+					TargetRefs:      validGatewayTarget(),
+					Replicas:        3,
+					RefreshInterval: metav1.Duration{Duration: 30 * time.Second},
 					MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{
 						Name: "master-key",
 					},
@@ -216,6 +218,12 @@ var _ = Describe("CRD validation", func() {
 			obj := base("obp-no-master")
 			obj.Spec.MasterKeySecretRef.Name = ""
 			mustFail(obj, "masterKeySecretRef.name")
+		})
+
+		It("rejects refreshInterval below 5s", func() {
+			obj := base("obp-short-interval")
+			obj.Spec.RefreshInterval = metav1.Duration{Duration: 1 * time.Second}
+			mustFail(obj, "refreshInterval must be at least 5s")
 		})
 	})
 })

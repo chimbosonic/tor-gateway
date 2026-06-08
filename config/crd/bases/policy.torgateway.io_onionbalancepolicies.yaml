@@ -211,7 +211,11 @@ spec:
                 description: |-
                   RefreshInterval is the minimum interval between onionbalance config
                   rewrites in the frontend pod when backend instances change.
+                format: duration
                 type: string
+                x-kubernetes-validations:
+                - message: refreshInterval must be at least 5s
+                  rule: duration(self) >= duration('5s')
               replicas:
                 default: 3
                 description: |-

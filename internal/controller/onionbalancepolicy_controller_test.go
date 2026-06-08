@@ -13,6 +13,7 @@ package controller
 import (
 	"context"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -54,7 +55,8 @@ var _ = Describe("OnionBalancePolicy status", func() {
 					Kind:  "Gateway",
 					Name:  gwv1.ObjectName(gwName),
 				}},
-				Replicas: 3,
+				Replicas:        3,
+				RefreshInterval: metav1.Duration{Duration: 30 * time.Second},
 				MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{
 					Name: secretName,
 				},
@@ -290,7 +292,8 @@ var _ = Describe("OnionBalancePolicy status", func() {
 					Kind:  "Gateway",
 					Name:  "obp-xns-gw",
 				}},
-				Replicas: 3,
+				Replicas:        3,
+				RefreshInterval: metav1.Duration{Duration: 30 * time.Second},
 				MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{
 					Name:      "obp-xns-master",
 					Namespace: "obp-xns-target",
@@ -332,7 +335,8 @@ var _ = Describe("OnionBalancePolicy status", func() {
 					Kind:  "Gateway",
 					Name:  "obp-xns-deny-gw",
 				}},
-				Replicas: 3,
+				Replicas:        3,
+				RefreshInterval: metav1.Duration{Duration: 30 * time.Second},
 				MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{
 					Name:      "obp-xns-deny-master",
 					Namespace: "obp-xns-deny-target",
@@ -392,6 +396,7 @@ var _ = Describe("OnionBalancePolicy status", func() {
 					{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "obp-multi-gw2"},
 				},
 				Replicas:           3,
+				RefreshInterval:    metav1.Duration{Duration: 30 * time.Second},
 				MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "obp-multi-secret"},
 			},
 		}

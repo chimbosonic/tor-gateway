@@ -70,6 +70,8 @@ type OnionBalancePolicySpec struct {
 	// rewrites in the frontend pod when backend instances change.
 	//
 	// +kubebuilder:default="30s"
+	// +kubebuilder:validation:Format=duration
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('5s')",message="refreshInterval must be at least 5s"
 	// +optional
 	RefreshInterval metav1.Duration `json:"refreshInterval,omitempty"`
 
