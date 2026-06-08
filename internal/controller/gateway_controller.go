@@ -116,7 +116,7 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			"OnionBalancePolicy "+obp.Name+" is not Accepted; refusing to fall back to Mode A while HA is intended"); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return ctrl.Result{}, nil
 	}
 	if obp != nil && obpAccepted {
 		if err := r.cleanupModeAResources(ctx, gw); err != nil {
