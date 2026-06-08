@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -25,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
@@ -271,5 +273,122 @@ func TestCleanupModeBResources_GCsAllCrossNSPairs(t *testing.T) {
 	err = cl.Get(ctx, types.NamespacedName{Namespace: testMasterSecretNS, Name: CrossNSMasterRoleName(gw)}, &rbacv1.RoleBinding{})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("cross-NS RoleBinding should be deleted; got %v", err)
+	}
+}
+
+// TestEnsureModeB_ScaleDownShrinksBeforeGC verifies that when the StatefulSet
+// has not yet scaled down (Status.Replicas > Spec.Replicas), orphan backend
+// Secrets are preserved so in-flight pod init containers can still fetch them.
+func TestEnsureModeB_ScaleDownShrinksBeforeGC(t *testing.T) {
+	ctx := context.Background()
+	gw := sampleGateway()
+	obp := samplePolicy(2)
+	masterSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "master-keys", Namespace: gw.Namespace},
+		Data:       validMasterSecretData(t),
+	}
+	// StatefulSet at 4 replicas, Status also at 4 — simulates the moment just
+	// after the reconcile patches Spec down to 2 but pods have not gone yet.
+	oldReplicas := int32(4)
+	ss := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: BackendStatefulSetName(gw), Namespace: gw.Namespace},
+		Spec:       appsv1.StatefulSetSpec{Replicas: &oldReplicas},
+		Status:     appsv1.StatefulSetStatus{Replicas: 4, ReadyReplicas: 4},
+	}
+	seeds := make([]client.Object, 0, 8)
+	seeds = append(seeds, ss, gw, obp, masterSecret)
+	for i := range 4 {
+		seeds = append(seeds, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      BackendKeySecretName(gw, i),
+				Namespace: gw.Namespace,
+				Labels: map[string]string{
+					"torgateway.io/gateway": gw.Name,
+					"torgateway.io/role":    "backend",
+				},
+			},
+		})
+	}
+	sc := testScheme(t)
+	cl := fake.NewClientBuilder().WithScheme(sc).WithStatusSubresource(gw).WithObjects(seeds...).Build()
+	r := &GatewayReconciler{Client: cl, Scheme: sc, Images: sampleImages()}
+
+	if err := r.ensureModeB(ctx, gw, obp); err != nil {
+		t.Fatalf("ensureModeB: %v", err)
+	}
+
+	// StatefulSet spec should have been patched to 2.
+	var got appsv1.StatefulSet
+	if err := cl.Get(ctx, types.NamespacedName{Namespace: gw.Namespace, Name: BackendStatefulSetName(gw)}, &got); err != nil {
+		t.Fatalf("get StatefulSet: %v", err)
+	}
+	if got.Spec.Replicas == nil || *got.Spec.Replicas != 2 {
+		t.Errorf("StatefulSet spec replicas = %v, want 2", got.Spec.Replicas)
+	}
+
+	// Secrets at indices 2 and 3 must NOT be deleted yet — pods are still running.
+	for i := 2; i < 4; i++ {
+		var s corev1.Secret
+		if err := cl.Get(ctx, types.NamespacedName{Namespace: gw.Namespace, Name: BackendKeySecretName(gw, i)}, &s); err != nil {
+			t.Errorf("Secret backend-%d unexpectedly gone (GC should wait for pods to terminate): %v", i, err)
+		}
+	}
+}
+
+// TestEnsureModeB_ScaleDownGCsOnceReplicasMatch verifies that once the
+// StatefulSet status reflects the new replica count (all excess pods gone),
+// orphan backend Secrets are deleted on the next reconcile.
+func TestEnsureModeB_ScaleDownGCsOnceReplicasMatch(t *testing.T) {
+	ctx := context.Background()
+	gw := sampleGateway()
+	obp := samplePolicy(2)
+	masterSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "master-keys", Namespace: gw.Namespace},
+		Data:       validMasterSecretData(t),
+	}
+	// StatefulSet already at desired spec; Status.Replicas == Spec.Replicas == 2,
+	// meaning all excess pods have terminated and GC is safe.
+	matchedReplicas := int32(2)
+	ss := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: BackendStatefulSetName(gw), Namespace: gw.Namespace},
+		Spec:       appsv1.StatefulSetSpec{Replicas: &matchedReplicas},
+		Status:     appsv1.StatefulSetStatus{Replicas: 2, ReadyReplicas: 2},
+	}
+	seeds := make([]client.Object, 0, 8)
+	seeds = append(seeds, ss, gw, obp, masterSecret)
+	// Seed 4 backend Secrets (indices 0-3); 2 and 3 are orphans.
+	for i := range 4 {
+		seeds = append(seeds, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      BackendKeySecretName(gw, i),
+				Namespace: gw.Namespace,
+				Labels: map[string]string{
+					"torgateway.io/gateway": gw.Name,
+					"torgateway.io/role":    "backend",
+				},
+			},
+		})
+	}
+	sc := testScheme(t)
+	cl := fake.NewClientBuilder().WithScheme(sc).WithStatusSubresource(gw).WithObjects(seeds...).Build()
+	r := &GatewayReconciler{Client: cl, Scheme: sc, Images: sampleImages()}
+
+	if err := r.ensureModeB(ctx, gw, obp); err != nil {
+		t.Fatalf("ensureModeB: %v", err)
+	}
+
+	// Secrets 0 and 1 must still exist.
+	for i := range 2 {
+		var s corev1.Secret
+		if err := cl.Get(ctx, types.NamespacedName{Namespace: gw.Namespace, Name: BackendKeySecretName(gw, i)}, &s); err != nil {
+			t.Errorf("Secret backend-%d should still exist: %v", i, err)
+		}
+	}
+	// Secrets 2 and 3 must be deleted — status matched, GC should have run.
+	for i := 2; i < 4; i++ {
+		err := cl.Get(ctx, types.NamespacedName{Namespace: gw.Namespace, Name: BackendKeySecretName(gw, i)}, &corev1.Secret{})
+		if !apierrors.IsNotFound(err) {
+			t.Errorf("orphan Secret backend-%d should be deleted after GC; got %v", i, err)
+		}
 	}
 }

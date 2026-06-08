@@ -620,9 +620,6 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 			return fmt.Errorf("backend Secret %d: %w", i, err)
 		}
 	}
-	if err := r.gcOrphanBackendSecrets(ctx, gw, pol.Spec.Replicas); err != nil {
-		return err
-	}
 
 	svc, err := BuildBackendHeadlessService(gw, r.Scheme)
 	if err != nil {
@@ -693,6 +690,10 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 	}
 	if err := r.ensureHAStatefulSet(ctx, ss); err != nil {
 		return fmt.Errorf("backend StatefulSet: %w", err)
+	}
+
+	if err := r.gcBackendSecretsIfSettled(ctx, gw, ss, pol.Spec.Replicas); err != nil {
+		return err
 	}
 
 	d, err := BuildFrontendDeployment(gw, pol, master, r.Images, r.TestingNetworkInclude != "", r.Scheme)
@@ -950,6 +951,23 @@ func previousOnion(gw *gwv1.Gateway) string {
 		return ""
 	}
 	return gw.Status.Addresses[0].Value
+}
+
+// gcBackendSecretsIfSettled calls gcOrphanBackendSecrets only when the
+// StatefulSet's actual replica count has caught up with its desired spec.
+// On scale-down, excess pods may still be running init containers that
+// API-fetch their own Secret; deleting Secrets before those pods terminate
+// causes a 404. The Gateway reconciler Owns(&appsv1.StatefulSet{}) so any
+// status change automatically requeues the reconcile.
+func (r *GatewayReconciler) gcBackendSecretsIfSettled(ctx context.Context, gw *gwv1.Gateway, ss *appsv1.StatefulSet, replicas int32) error {
+	var current appsv1.StatefulSet
+	if err := r.Get(ctx, client.ObjectKeyFromObject(ss), &current); err != nil {
+		return nil // not found yet — nothing to GC
+	}
+	if current.Spec.Replicas == nil || current.Status.Replicas != *current.Spec.Replicas {
+		return nil // pods still terminating — requeue via StatefulSet Watch
+	}
+	return r.gcOrphanBackendSecrets(ctx, gw, replicas)
 }
 
 // gcOrphanBackendSecrets deletes per-pod backend Secrets whose index is
