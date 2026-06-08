@@ -370,7 +370,10 @@ var _ = Describe("OnionBalance HA — mutations", Ordered, Label("onionbalance",
 		Expect(err).NotTo(HaveOccurred(), "delete backend pod %s", podName)
 
 		By("verifying the master .onion still serves / after pod kill")
-		Eventually(fetchOverTor("ha-gw-mut-tor-client", "/"), "1m", "5s").
+		// Pod kill -> StatefulSet restarts pod -> onionbalance descriptor refresh ->
+		// HSDir re-publish -> client re-lookup. Chutney testnet typically resolves
+		// within 2 min; 3m provides headroom for cold CI runners.
+		Eventually(fetchOverTor("ha-gw-mut-tor-client", "/"), "3m", "5s").
 			Should(Equal("backend-A"), "service should remain up after one pod kill")
 	})
 
