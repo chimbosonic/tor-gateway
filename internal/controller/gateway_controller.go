@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -933,7 +934,13 @@ func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gate
 	// the in-memory gw. So we must set the status fields AFTER this call,
 	// not before.
 	if annotationsChanged {
-		if err := r.Update(ctx, gw); err != nil {
+		if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			return r.Update(ctx, gw)
+		}); err != nil {
+			return err
+		}
+		// Re-fetch to get the updated ResourceVersion before the status write.
+		if err := r.Get(ctx, client.ObjectKeyFromObject(gw), gw); err != nil {
 			return err
 		}
 	}
@@ -961,7 +968,9 @@ func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gate
 	for _, c := range wantConds {
 		setCondition(&gw.Status.Conditions, c)
 	}
-	return r.Status().Update(ctx, gw)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		return r.Status().Update(ctx, gw)
+	})
 }
 
 func previousOnion(gw *gwv1.Gateway) string {

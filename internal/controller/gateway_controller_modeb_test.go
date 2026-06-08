@@ -13,6 +13,7 @@ package controller
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"strings"
 	"testing"
 
@@ -548,5 +549,116 @@ func TestFindEffectiveOnionBalance_PerAncestorAccepted(t *testing.T) {
 	_, accepted, _ = r.findEffectiveOnionBalance(context.Background(), gwA)
 	if !accepted {
 		t.Error("gw-a should see Accepted=true")
+	}
+}
+
+// --- retryProbeClient — simulates 409 Conflict on first Update / Status().Update ---
+
+// retryProbeStatusWriter wraps a SubResourceWriter and injects a 409 Conflict on
+// the first call to Update, delegating all subsequent calls to the real writer.
+type retryProbeStatusWriter struct {
+	inner  client.SubResourceWriter
+	parent *retryProbeClient
+}
+
+func (s *retryProbeStatusWriter) Create(ctx context.Context, obj client.Object, subResource client.Object, opts ...client.SubResourceCreateOption) error {
+	return s.inner.Create(ctx, obj, subResource, opts...)
+}
+
+func (s *retryProbeStatusWriter) Update(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+	s.parent.statusUpdateAttempts++
+	if s.parent.statusUpdateAttempts == 1 {
+		return apierrors.NewConflict(
+			schema.GroupResource{Group: gwv1.GroupName, Resource: "gateways"},
+			obj.GetName(),
+			errors.New("simulated conflict"),
+		)
+	}
+	return s.inner.Update(ctx, obj, opts...)
+}
+
+func (s *retryProbeStatusWriter) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+	return s.inner.Patch(ctx, obj, patch, opts...)
+}
+
+func (s *retryProbeStatusWriter) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...client.SubResourceApplyOption) error {
+	return s.inner.Apply(ctx, obj, opts...)
+}
+
+// retryProbeClient wraps a client.Client and injects 409 Conflict errors on
+// the first call to Update and the first call to Status().Update.
+type retryProbeClient struct {
+	client.Client
+	updateAttempts       int
+	statusUpdateAttempts int
+}
+
+func (c *retryProbeClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	c.updateAttempts++
+	if c.updateAttempts == 1 {
+		return apierrors.NewConflict(
+			schema.GroupResource{Group: gwv1.GroupName, Resource: "gateways"},
+			obj.GetName(),
+			errors.New("simulated conflict"),
+		)
+	}
+	return c.Client.Update(ctx, obj, opts...)
+}
+
+func (c *retryProbeClient) Status() client.SubResourceWriter {
+	return &retryProbeStatusWriter{inner: c.Client.Status(), parent: c}
+}
+
+// TestUpdateStatusModeB_RetriesOnConflict verifies that updateStatusModeB uses
+// RetryOnConflict for both the annotation Update and the Status().Update calls.
+// The retryProbeClient returns a 409 on the first attempt of each; the test
+// asserts the function returns nil and that two attempts were made for each.
+func TestUpdateStatusModeB_RetriesOnConflict(t *testing.T) {
+	ctx := context.Background()
+	gw := sampleGateway()
+	// Set a replica annotation that differs from the policy so that the
+	// annotation-update branch (r.Update) is exercised.
+	gw.Annotations = map[string]string{annLastReplicas: "0"}
+
+	pol := samplePolicy(3)
+
+	sc := testScheme(t)
+	inner := fake.NewClientBuilder().
+		WithScheme(sc).
+		WithStatusSubresource(gw).
+		WithObjects(gw, pol).
+		Build()
+	probe := &retryProbeClient{Client: inner}
+	r := &GatewayReconciler{Client: probe, Scheme: sc, Images: sampleImages()}
+
+	kp, err := tor.GenerateKeyPair(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	master := kp.OnionAddress()
+
+	if err := r.updateStatusModeB(ctx, gw, master, pol); err != nil {
+		t.Fatalf("updateStatusModeB returned error: %v", err)
+	}
+
+	// Each write should have been attempted twice (first=conflict, second=success).
+	if probe.updateAttempts != 2 {
+		t.Errorf("Update attempts = %d, want 2", probe.updateAttempts)
+	}
+	if probe.statusUpdateAttempts != 2 {
+		t.Errorf("Status().Update attempts = %d, want 2", probe.statusUpdateAttempts)
+	}
+
+	// Verify the status was actually persisted.
+	var got gwv1.Gateway
+	if err := inner.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &got); err != nil {
+		t.Fatalf("get gateway: %v", err)
+	}
+	if len(got.Status.Addresses) == 0 || got.Status.Addresses[0].Value != master.String() {
+		t.Errorf("status.addresses = %v, want [%s]", got.Status.Addresses, master.String())
+	}
+	acceptedCond := meta.FindStatusCondition(got.Status.Conditions, string(gwv1.GatewayConditionAccepted))
+	if acceptedCond == nil || acceptedCond.Status != metav1.ConditionTrue {
+		t.Errorf("Accepted condition = %v, want True", acceptedCond)
 	}
 }
