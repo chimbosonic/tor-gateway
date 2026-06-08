@@ -193,7 +193,7 @@ metadata:
   namespace: ` + chutneyNamespace + `
   labels: { app: chutney }
 spec:
-  restartPolicy: Never
+  restartPolicy: OnFailure
   securityContext:
     runAsNonRoot: true
     runAsUser: 65532
@@ -217,6 +217,12 @@ spec:
       periodSeconds: 15
       timeoutSeconds: 20
       failureThreshold: 30
+    livenessProbe:
+      exec:
+        command: ["pgrep", "tor"]
+      initialDelaySeconds: 60
+      periodSeconds: 60
+      failureThreshold: 5
     resources:
       requests: { cpu: "500m", memory: "1Gi" }
       limits:   { cpu: "1",    memory: "2Gi" }
