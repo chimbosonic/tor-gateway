@@ -142,6 +142,9 @@ func BuildBackendStatefulSet(
 	images RuntimeImages,
 	scheme *runtime.Scheme,
 ) (*appsv1.StatefulSet, error) {
+	if images.Tor == "" || images.TorInit == "" {
+		return nil, fmt.Errorf("BuildBackendStatefulSet: required image flag not set; check --tor-image, --tor-init-image")
+	}
 	replicas := pol.Spec.Replicas
 	labels := HALabels(gw, haRoleBackend)
 
@@ -597,6 +600,9 @@ func BuildFrontendDeployment(
 	testingMode bool,
 	scheme *runtime.Scheme,
 ) (*appsv1.Deployment, error) {
+	if images.Tor == "" || images.TorInit == "" || images.Onionbalance == "" || images.Obrefresh == "" {
+		return nil, fmt.Errorf("BuildFrontendDeployment: required image flag not set; check --onionbalance-image, --obrefresh-image, --tor-init-image, --tor-image")
+	}
 	labels := HALabels(gw, haRoleFrontend)
 
 	// In testing mode, --is-testnet drops onionbalance's descriptor cycle

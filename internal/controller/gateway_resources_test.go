@@ -61,10 +61,12 @@ func sampleGateway() *gwv1.Gateway {
 
 func sampleImages() RuntimeImages {
 	return RuntimeImages{
-		Tor:      "ghcr.io/chimbosonic/tor:0.4.9",
-		Router:   "ghcr.io/chimbosonic/tor-gateway-router:dev",
-		TorInit:  "ghcr.io/chimbosonic/tor-gateway-tor-init:dev",
-		Operator: "ghcr.io/chimbosonic/tor-gateway-manager:dev",
+		Tor:          "ghcr.io/chimbosonic/tor:0.4.9",
+		Router:       "ghcr.io/chimbosonic/tor-gateway-router:dev",
+		TorInit:      "ghcr.io/chimbosonic/tor-gateway-tor-init:dev",
+		Operator:     "ghcr.io/chimbosonic/tor-gateway-manager:dev",
+		Onionbalance: "ghcr.io/chimbosonic/onionbalance:dev",
+		Obrefresh:    "ghcr.io/chimbosonic/obrefresh:dev",
 	}
 }
 

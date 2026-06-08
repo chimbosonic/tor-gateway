@@ -608,6 +608,7 @@ func TestBuildFrontendDeployment(t *testing.T) {
 	master := sampleMasterAddr(t)
 	d, err := BuildFrontendDeployment(gw, pol, master, RuntimeImages{
 		Tor:          "tor:v1",
+		TorInit:      "torinit:v1",
 		Onionbalance: "onionbalance:v1",
 		Obrefresh:    "obrefresh:v1",
 	}, false, scheme)
@@ -660,7 +661,7 @@ func TestBuildFrontendDeployment_IsTestnetFlag(t *testing.T) {
 		},
 	}
 	master := sampleMasterAddr(t)
-	imgs := RuntimeImages{Tor: "tor:v1", Onionbalance: "ob:v1", Obrefresh: "obr:v1"}
+	imgs := RuntimeImages{Tor: "tor:v1", TorInit: "torinit:v1", Onionbalance: "ob:v1", Obrefresh: "obr:v1"}
 
 	for _, tc := range []struct {
 		name        string
@@ -1002,6 +1003,35 @@ func TestBuildFrontendDeployment_ObrefreshGatewayUIDArg(t *testing.T) {
 	}
 	if !sawArg {
 		t.Fatalf("obrefresh missing --gateway-uid arg")
+	}
+}
+
+func TestBuildFrontendDeployment_RejectsEmptyImages(t *testing.T) {
+	cases := []RuntimeImages{
+		{Tor: "", TorInit: "init:x", Onionbalance: "ob:x", Obrefresh: "obr:x"},
+		{Tor: "tor:x", TorInit: "", Onionbalance: "ob:x", Obrefresh: "obr:x"},
+		{Tor: "tor:x", TorInit: "init:x", Onionbalance: "", Obrefresh: "obr:x"},
+		{Tor: "tor:x", TorInit: "init:x", Onionbalance: "ob:x", Obrefresh: ""},
+	}
+	for _, imgs := range cases {
+		_, err := BuildFrontendDeployment(sampleGateway(), samplePolicy(2), tor.OnionAddress{}, imgs, false, testScheme(t))
+		if err == nil {
+			t.Errorf("expected error for empty image in %+v", imgs)
+		}
+	}
+}
+
+func TestBuildBackendStatefulSet_RejectsEmptyImages(t *testing.T) {
+	cases := []RuntimeImages{
+		{Tor: "", TorInit: "init:x"},
+		{Tor: "tor:x", TorInit: ""},
+	}
+	master := sampleMasterAddr(t)
+	for _, imgs := range cases {
+		_, err := BuildBackendStatefulSet(sampleStatefulSetGateway(), samplePolicy(2), master, imgs, testScheme(t))
+		if err == nil {
+			t.Errorf("expected error for empty image in %+v", imgs)
+		}
 	}
 }
 

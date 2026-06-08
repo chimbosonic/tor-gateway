@@ -19,6 +19,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -141,6 +142,11 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	if onionbalanceImage == "" || obrefreshImage == "" || torImage == "" || initImage == "" {
+		fmt.Fprintln(os.Stderr, "fatal: --onionbalance-image, --obrefresh-image, --tor-image, --tor-init-image are required")
+		os.Exit(2)
+	}
 
 	var clusterPodCIDRs []string
 	if clusterPodCIDRsRaw != "" {
