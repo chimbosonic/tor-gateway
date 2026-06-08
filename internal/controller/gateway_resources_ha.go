@@ -620,6 +620,7 @@ func BuildFrontendDeployment(
 	// newexpr rule, whose suggested rewrite to new(T) silently swaps in
 	// the zero value and would weaken pod security.
 	nonRoot := true
+	shareProc := true
 	uid := int64(65532)
 	replicas := int32(1)
 
@@ -641,7 +642,8 @@ func BuildFrontendDeployment(
 	pod := corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: labels},
 		Spec: corev1.PodSpec{
-			ServiceAccountName: FrontendName(gw),
+			ServiceAccountName:    FrontendName(gw),
+			ShareProcessNamespace: &shareProc,
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsNonRoot:   &nonRoot,
 				RunAsUser:      &uid,

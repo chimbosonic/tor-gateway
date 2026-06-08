@@ -971,6 +971,16 @@ func TestBuildFrontendRole_GetIsResourceNamesScoped(t *testing.T) {
 	}
 }
 
+func TestBuildFrontendDeployment_SharesProcessNamespace(t *testing.T) {
+	dep, err := BuildFrontendDeployment(sampleGateway(), samplePolicy(2), tor.OnionAddress{}, sampleImages(), false, testScheme(t))
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if dep.Spec.Template.Spec.ShareProcessNamespace == nil || !*dep.Spec.Template.Spec.ShareProcessNamespace {
+		t.Fatal("frontend PodSpec must set ShareProcessNamespace=true so obrefresh can SIGHUP onionbalance")
+	}
+}
+
 func TestBuildFrontendDeployment_ObrefreshGatewayUIDArg(t *testing.T) {
 	gw := sampleGateway()
 	gw.UID = testGwUID
