@@ -43,53 +43,92 @@ When an `OnionBalancePolicy` targets a Gateway, the operator provisions a
 frontend onionbalance pod and a backend StatefulSet of N independent Tor
 instances. Mode-B-specific security properties:
 
-- **Master key.** The user-supplied master ed25519 key is the
-  permanent identity of the published `.onion`. Treat the Secret the
-  same way you treat the Mode A `<gw>-keys` Secret: never logged, never
-  in ConfigMaps, `defaultMode: 0400` on the volume mount.
-- **Backend keys.** Operator-generated per-pod Secrets. A backend key
-  compromise is contained — the master is unaffected; the compromised
-  backend's `.onion` simply rotates out of the descriptor pool when the
-  operator regenerates its Secret (manual today; just delete the
-  Secret and the reconciler will regenerate).
-- **PoW.** `HiddenServicePoWDefensesEnabled` is **force-disabled** on
-  backends regardless of `TorServicePolicy.poWDefensesEnabled`. Reason:
-  upstream onionbalance has no PoW propagation today
-  (gitlab.torproject.org/tpo/onion-services/onionbalance#13) and
-  enabling PoW on a backend without prioritisation makes the queue
-  worse than no PoW.
-- **Frontend SPOF.** The frontend pod is a single point of failure for
-  descriptor publication. K8s Deployment auto-restart is the v1
-  mitigation (brief outage during pod restart, no `.onion` change).
-  Upstream's recommended HA story for the frontend itself is "deploy a
-  second frontend with a separate `.onion`" — explicitly out of scope
-  for v1; it's a different feature shape.
-- **Vanguards descriptor size.** Onionbalance descriptors with the
-  maximum number of intro points can exceed Vanguards' default 30 kB
-  cap. v1 documents but does not enforce. If you set `replicas` close
-  to the cap (8) AND run Vanguards, monitor descriptor sizes.
+**Backend-key isolation.** Each backend pod's runtime Tor container has no
+Secret volume mount. Its onion key is delivered by an init container that
+calls the operator's internal API (`GET /api/v1/secret`) and writes the
+result into an in-pod `emptyDir`, which the Tor container then uses as its
+`HiddenServiceDir`. The init container's ServiceAccount is granted
+`secrets:get` scoped to the exact set of backend Secret names belonging to
+that Gateway, so a node-level attacker sees only the emptyDir contents of
+the pod they control. There is an RBAC limitation worth noting: because
+StatefulSet does not template per-replica ServiceAccounts, the init
+container's SA can fetch any of THIS Gateway's backend keys via the
+Kubernetes API — not just its own. A compromised init container therefore
+cannot reach other Gateways' keys or the master key, but it can read its
+sibling replicas' keys within the same Gateway.
+
+**Frontend SA scope.** The frontend pod's ServiceAccount is granted
+`secrets:get` scoped to the master Secret plus all N backend Secrets by
+name (`resourceNames`). `secrets:list/watch` remains namespace-wide (a
+Kubernetes RBAC limitation — `resourceNames` cannot restrict list or watch
+at the apiserver level). The operator narrows the informer in code with a
+LabelSelector requiring `torgateway.io/owner-uid=<gw.UID>`, so only Secrets
+the operator itself labelled are processed. A tenant-planted Secret that
+does not carry the operator-set owner-UID label is silently skipped. For
+the strongest isolation, deploy one Gateway per namespace so that the
+namespace-wide list/watch permission does not cross tenant boundaries.
+
+**Cross-namespace `MasterKeySecretRef`.** The `masterKeySecretRef` field
+may name a Secret in a different namespace than the Gateway. A
+`ReferenceGrant` in the source namespace is the authoritative gate and is
+re-validated on every reconcile. The operator emits a per-Gateway `Role`
+and `RoleBinding` in the source namespace granting the frontend SA `get` on
+exactly the named Secret; old bindings are garbage-collected when the
+reference changes namespace.
+
+**PoW in Mode B.** The Tor PoW intro-point defenses cannot be enabled on
+onionbalance backend instances. The PoW challenge lives at the Tor protocol
+layer — specifically at the introduction-point circuit — which is owned by
+each backend's `tor` process. The onionbalance frontend cannot proxy or
+aggregate those challenges across replicas, so enabling PoW on backends
+would degrade rather than improve availability. When PoW would otherwise be
+active (the default `TorServicePolicy` or an explicit policy with
+`powDefenses.enabled: true`), the operator emits a `PoWForcedOffInHA`
+Warning event, annotates the Gateway with
+`torgateway.io/pow-override-emitted`, and includes a `PoW forced off` note
+in the `OBPAccepted` condition message so the signal is visible in
+`kubectl get gateway -o yaml`. Mitigations: rely on Tor's intro-point rate
+limiting, restrict access to authorised clients via `TorClientAuthPolicy`,
+or reduce the blast radius by routing a fraction of traffic to a Mode A
+Gateway with PoW enabled.
+
+**Frontend SPOF.** The frontend pod is a single point of failure for
+descriptor publication. Kubernetes Deployment auto-restart is the current
+mitigation (brief outage during pod restart, `.onion` address unchanged).
+Running a second frontend with a separate master `.onion` is out of scope
+for v1.
+
+**Vanguards descriptor size.** Onionbalance descriptors with the maximum
+number of intro points can exceed Vanguards' default 30 kB cap. If you set
+`replicas` close to the cap (8) and run Vanguards, monitor descriptor sizes.
 
 ### Testing mode (chutney)
 
 The operator accepts a `--testing-tor-network-file=<path>` flag that
-splices `TestingTorNetwork 1` + a caller-provided `DirAuthority` block
-into every Tor pod's torrc. This exists to let our e2e tests bootstrap
-against a private chutney-managed Tor network, with ~30-second
-descriptor publication instead of the public Tor network's 5-15 minute
-cycle.
+splices `TestingTorNetwork 1` and a caller-provided `DirAuthority` block
+into every Tor pod's torrc. This flag is operator-level only and is never
+exposed to API tenants. It exists to let e2e tests bootstrap against a
+private chutney-managed Tor network, with ~30-second descriptor publication
+instead of the public network's 5–15 minute cycle.
 
-**Never enable this in production.** When the flag is set, every
-`.onion` the operator publishes is resolvable only by clients
-participating in the configured testing network. A production cluster
-that accidentally enabled the flag would silently publish unreachable
-addresses.
+**Never enable this in production.** When the flag is set, every `.onion`
+the operator publishes is resolvable only by clients participating in the
+configured testing network. A production cluster that accidentally enables
+the flag silently publishes unreachable addresses.
 
-The Helm chart's `testingTorNetwork.enabled` value defaults to `false`.
-Explicit opt-in is required.
+When testing mode is active, the per-Gateway egress NetworkPolicy is
+narrowed to the chutney pod CIDR plus the DirAuth/OR ports. Broader
+namespace-level egress is not permitted, so a misconfigured test pod cannot
+accidentally reach the public Tor network.
 
-Do NOT reuse the same `.onion` keys between testing and production
-deployments — once a key has been published to a chutney testing
-network, it should be retired.
+The Helm chart's `testingTorNetwork.enabled` value defaults to `false`. To
+guard against accidental enablement, `helm template` fails at render time if
+`testingTorNetwork.enabled` is `true` but either `testingTorNetwork.podNamespace`
+or `testingTorNetwork.configMapName` is unset. Explicit, complete
+configuration is required before the chart will render.
+
+Do not reuse `.onion` keys between testing and production deployments —
+once a key has been published to a chutney network, retire it.
 
 ### Known gaps
 
