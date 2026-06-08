@@ -677,6 +677,16 @@ func BuildFrontendDeployment(
 					Name:  "onionbalance",
 					Image: images.Onionbalance,
 					Args:  obArgs,
+					LivenessProbe: &corev1.Probe{
+						ProbeHandler: corev1.ProbeHandler{
+							Exec: &corev1.ExecAction{
+								Command: []string{"sh", "-c", "test -s /run/onionbalance/onionbalance.pid"},
+							},
+						},
+						InitialDelaySeconds: 15,
+						PeriodSeconds:       30,
+						FailureThreshold:    3,
+					},
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: "ob-config", MountPath: "/etc/onionbalance/config"},
 						{Name: "ob-keys", MountPath: "/etc/onionbalance/keys", ReadOnly: true},
@@ -698,9 +708,22 @@ func BuildFrontendDeployment(
 						"--pidfile=/run/onionbalance/onionbalance.pid",
 						"--interval=" + pol.Spec.RefreshInterval.Duration.String(),
 					},
+					LivenessProbe: &corev1.Probe{
+						ProbeHandler: corev1.ProbeHandler{
+							Exec: &corev1.ExecAction{
+								// The obrefresh image is distroless; the binary is
+								// copied in as /usr/local/bin/app (see Dockerfile).
+								Command: []string{"/usr/local/bin/app", "--healthcheck"},
+							},
+						},
+						InitialDelaySeconds: 60,
+						PeriodSeconds:       30,
+						FailureThreshold:    3,
+					},
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: "ob-config", MountPath: "/etc/onionbalance/config"},
 						{Name: "ob-run", MountPath: "/run/onionbalance", ReadOnly: true},
+						{Name: "ob-refresh-run", MountPath: "/run/obrefresh"},
 					},
 					SecurityContext: haHardenedSecurityContext(),
 				},
@@ -710,6 +733,7 @@ func BuildFrontendDeployment(
 				{Name: "ob-config", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 				{Name: "ob-run", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 				{Name: "ob-keys", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+				{Name: "ob-refresh-run", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 				{
 					Name: "torrc",
 					VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{

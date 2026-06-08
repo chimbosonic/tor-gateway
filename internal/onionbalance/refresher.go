@@ -63,6 +63,10 @@ type RefresherConfig struct {
 	// Client is the Kubernetes clientset to drive the informer. Production
 	// callers pass a real clientset; tests pass a fake (k8s.io/client-go/kubernetes/fake).
 	Client kubernetes.Interface
+	// HealthcheckFile, when non-empty, is the path to a file whose mtime the
+	// --healthcheck flag reads to determine liveness. The refresher writes it
+	// after every successful rebuild. If empty, the write is skipped.
+	HealthcheckFile string
 }
 
 // Refresher watches backend Secrets for a Gateway and keeps the
@@ -182,6 +186,11 @@ func (r *Refresher) rebuild(_ context.Context, objs []any) {
 		// Not fatal: on first run the daemon may not be up yet.
 		slog.Warn("onionbalance SIGHUP failed", "pid", r.cfg.PIDFile, "err", err)
 		return
+	}
+	if r.cfg.HealthcheckFile != "" {
+		if err := os.WriteFile(r.cfg.HealthcheckFile, []byte("ok\n"), 0o600); err != nil {
+			slog.Warn("healthcheck file write failed", "path", r.cfg.HealthcheckFile, "err", err)
+		}
 	}
 	slog.Info("onionbalance config refreshed", "backends", len(backends))
 }

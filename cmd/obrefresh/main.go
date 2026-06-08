@@ -22,6 +22,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -35,6 +36,10 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+// healthcheckFile is the well-known path the refresher writes after each
+// successful rebuild and the --healthcheck flag reads to determine liveness.
+const healthcheckFile = "/run/obrefresh/last-success"
+
 func main() {
 	var (
 		gatewayName   string
@@ -45,6 +50,7 @@ func main() {
 		interval      time.Duration
 		masterAddr    string
 		masterKeyPath string
+		healthcheck   bool
 	)
 	flag.StringVar(&gatewayName, "gateway", "", "name of the Gateway this refresher serves")
 	flag.StringVar(&gatewayNS, "namespace", "", "namespace of the Gateway this refresher serves")
@@ -59,7 +65,14 @@ func main() {
 		"the master .onion address (with or without the .onion suffix)")
 	flag.StringVar(&masterKeyPath, "master-key-path", "/etc/onionbalance/keys/hs_ed25519_secret_key",
 		"in-pod path where the master ed25519 secret key is mounted")
+	flag.BoolVar(&healthcheck, "healthcheck", false,
+		"exit 0 if the last refresh succeeded within 2× --interval, else exit 1")
 	flag.Parse()
+
+	if healthcheck {
+		runHealthcheck(interval)
+		return
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
@@ -111,6 +124,7 @@ func main() {
 		Master:           master,
 		OwnerUID:         gatewayUID,
 		Client:           client,
+		HealthcheckFile:  healthcheckFile,
 	})
 	if err != nil {
 		slog.Error("refresher init failed", "err", err)
@@ -119,6 +133,22 @@ func main() {
 
 	if err := r.Run(ctx); err != nil {
 		slog.Error("refresher exited with error", "err", err)
+		os.Exit(1)
+	}
+}
+
+// runHealthcheck exits 0 if the healthcheck file was written within 2×interval
+// of now, and exits 1 otherwise (file missing, unreadable, or stale).
+func runHealthcheck(interval time.Duration) {
+	info, err := os.Stat(healthcheckFile)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "healthcheck: stat failed:", err)
+		os.Exit(1)
+	}
+	age := time.Since(info.ModTime())
+	window := 2 * interval
+	if age > window {
+		fmt.Fprintf(os.Stderr, "healthcheck: last success %v ago, window %v\n", age.Truncate(time.Second), window)
 		os.Exit(1)
 	}
 }

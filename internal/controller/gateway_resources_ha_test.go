@@ -1054,3 +1054,17 @@ func TestBuildFrontendRole_CrossNSMasterOmitsFromInNSResourceNames(t *testing.T)
 		}
 	}
 }
+
+func TestBuildFrontendDeployment_OnionbalanceLivenessProbe(t *testing.T) {
+	dep, err := BuildFrontendDeployment(sampleGateway(), samplePolicy(2), tor.OnionAddress{}, sampleImages(), false, testScheme(t))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		if c.Name == "onionbalance" || c.Name == "obrefresh" {
+			if c.LivenessProbe == nil {
+				t.Errorf("%s container missing LivenessProbe", c.Name)
+			}
+		}
+	}
+}
