@@ -34,6 +34,8 @@ Implemented and tested:
 
 The critical path to a functionally deployable operator — container images, a real-Tor data-plane e2e, and a published, signed chart — is complete. Cross-namespace `ReferenceGrant` shipped in `v0.3.0` (controller authority for `backendRefs`; router fail-closed); data-plane liveness/readiness/startup probes and `events: create;patch` RBAC shipped in `v0.3.1`; per-Gateway egress NetworkPolicy (ReferenceGrant-aware) shipped in `v0.3.2`. All v1-target features shipped: onionbalance HA (`OnionBalancePolicy`) landed in the next release tag (human picks the version at tag time per CLAUDE.md).
 
+`v0.4.0` (in progress): pre-release review fixes covering Mode B correctness, NetworkPolicy coverage, RBAC narrowing, and chart configuration. Mode B remains experimental; graduation targeted for v0.5.
+
 ---
 
 ## High-level architecture

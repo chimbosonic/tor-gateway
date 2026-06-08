@@ -77,7 +77,7 @@ Pushing a `vX.Y.Z` tag triggers `.github/workflows/release.yml`, which builds an
 - Gateway API v1.5 conformance (Gateway + HTTPRoute + ReferenceGrant).
 - Persistent v3 keys via Secrets.
 - v3 client authorization via `TorClientAuthPolicy`.
-- HA via onionbalance via `OnionBalancePolicy`.
+- HA via onionbalance via `OnionBalancePolicy` (Mode B, experimental in v0.4.0; requires chart appVersion ≥ 0.4.0 because earlier installs reference the wrong onionbalance image repo).
 - Vanity address prefixes via `TorServicePolicy.vanityPrefix` (on-demand `mkp224o` Job).
 - Prometheus metrics, cosign-signed images, SBOM.
 
