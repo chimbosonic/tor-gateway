@@ -1,9 +1,8 @@
 name: E2E Tests
 
 # E2E spins up Kind, builds and loads images, applies the operator, and
-# exercises live reconcilers. Costs 3-5 minutes per run; we gate every PR
-# on the faster conformance and unit/envtest suites instead and run e2e
-# on push-to-main and a nightly cron so regressions surface within 24h.
+# exercises live reconcilers. Three-row matrix isolates Mode A from Mode B
+# from Mode B mutations so a chutney flake in one suite doesn't mask the others.
 on:
   push:
     branches: [main]
@@ -15,9 +14,18 @@ jobs:
   test-e2e:
     permissions:
       contents: read
-    name: Run on Ubuntu
+    name: e2e (${{ matrix.suite }})
     runs-on: ubuntu-latest
-    # CI uses docker; see comments in conformance.yml.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: core
+            label_filter: '!onionbalance'
+          - suite: onionbalance-base
+            label_filter: 'onionbalance && !ob-failover && !ob-crossns && !networkpolicy'
+          - suite: onionbalance-mutations
+            label_filter: 'onionbalance && (ob-failover || ob-crossns || networkpolicy)'
     env:
       CONTAINER_TOOL: docker
     steps:
@@ -40,7 +48,9 @@ jobs:
       - name: Verify kind installation
         run: kind version
 
-      - name: Running Test e2e
+      - name: Run e2e (${{ matrix.suite }})
+        env:
+          E2E_LABEL_FILTER: ${{ matrix.label_filter }}
         run: |
           go mod tidy
-          make test-e2e
+          make test-e2e-suite
