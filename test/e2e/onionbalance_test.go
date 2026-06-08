@@ -17,6 +17,14 @@ You may obtain a copy of the License at
 // scale-down. Uses the in-cluster chutney Tor network so descriptor propagation
 // is fast (~30–60 s rather than 5–15 min on the public network).
 
+// Spec authoring rules for this file (codified by the stable-e2e-pipeline design):
+//  1. No spec depends on another Describe block's state — each block re-creates
+//     its own Gateway/OBP/Secret in its own namespace.
+//  2. Within an Ordered block, observer specs come before mutator specs.
+//  3. Use Label("ob-failover") on mutator specs and Label("ob-crossns") on
+//     cross-namespace specs so the CI matrix can route them correctly.
+//  4. Generous setup budgets (5-10m), tight assertion budgets (<=2m).
+
 package e2e
 
 import (
@@ -44,71 +52,69 @@ import (
 
 const obpNS = "tor-gateway-ha"
 
-var _ = Describe("OnionBalance HA (Mode B)", Ordered, Label("onionbalance"), func() {
+// modeBFixture builds a Mode B test fixture in the given namespace + GatewayClass.
+// Generates a master keypair, creates the master Secret + GatewayClass + Gateway +
+// OBP + HTTPRoute + 2 echo backends, waits for the frontend Deployment Available,
+// waits for Gateway.status.addresses to publish the .onion, applies a tor-client
+// pod, and returns the master .onion address for use in specs.
+func modeBFixture(ns, gwClass, gwName string) (masterOnion string) {
 	const (
-		obpGwClass     = "tor-gateway-ha"
-		masterSecret   = "ha-master-key"
 		obrefreshImage = "ghcr.io/chimbosonic/tor-gateway-obrefresh:dev"
 		obImage        = "ghcr.io/chimbosonic/tor-gateway-onionbalance:dev"
 	)
 
-	var masterOnion string
+	masterSecretName := gwName + "-master-secret"
+	obpName := gwName + "-obp"
+	routeName := gwName + "-route"
+	backendA := gwName + "-backend-a"
+	backendB := gwName + "-backend-b"
+	torClientPod := gwName + "-tor-client"
 
-	fetchOverTor := func(pod, path string) func() string {
-		return func() string {
-			out, _ := utils.Run(exec.Command("kubectl", "-n", obpNS, "exec", pod, "-c", "curl", "--",
-				"curl", "-s", "--max-time", "30", "--socks5-hostname", "127.0.0.1:9050",
-				"http://"+masterOnion+path))
-			return strings.TrimSpace(out)
-		}
-	}
+	By("building and loading HA-specific images")
+	buildAndLoadImage("image-router", "ghcr.io/chimbosonic/tor-gateway-router:dev")
+	buildAndLoadImage("image-tor-init", "ghcr.io/chimbosonic/tor-gateway-tor-init:dev")
+	buildAndLoadImage("image-tor", "ghcr.io/chimbosonic/tor:0.4.9")
+	buildAndLoadImage("image-obrefresh", obrefreshImage)
+	buildAndLoadImage("image-onionbalance", obImage)
 
-	BeforeAll(func() {
-		By("building and loading HA-specific images")
-		buildAndLoadImage("image-router", "ghcr.io/chimbosonic/tor-gateway-router:dev")
-		buildAndLoadImage("image-tor-init", "ghcr.io/chimbosonic/tor-gateway-tor-init:dev")
-		buildAndLoadImage("image-tor", "ghcr.io/chimbosonic/tor:0.4.9")
-		buildAndLoadImage("image-obrefresh", obrefreshImage)
-		buildAndLoadImage("image-onionbalance", obImage)
+	By("patching the manager to enable the onionbalance and obrefresh images")
+	_, err := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-system", "patch", "deployment",
+		"tor-gateway-controller-manager", "--type=json",
+		"-p", fmt.Sprintf(`[
+			{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--onionbalance-image=%s"},
+			{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--obrefresh-image=%s"}
+		]`, obImage, obrefreshImage)))
+	Expect(err).NotTo(HaveOccurred(), "patch manager with HA image flags")
 
-		By("patching the manager to enable the onionbalance and obrefresh images")
-		_, err := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-system", "patch", "deployment",
-			"tor-gateway-controller-manager", "--type=json",
-			"-p", fmt.Sprintf(`[
-				{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--onionbalance-image=%s"},
-				{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--obrefresh-image=%s"}
-			]`, obImage, obrefreshImage)))
-		Expect(err).NotTo(HaveOccurred(), "patch manager with HA image flags")
+	By("waiting for the manager rollout after patch")
+	Eventually(func() (string, error) {
+		return utils.Run(exec.Command("kubectl", "-n", "tor-gateway-system",
+			"rollout", "status", "deployment/tor-gateway-controller-manager", "--timeout=30s"))
+	}, "2m", "5s").Should(ContainSubstring("successfully rolled out"))
 
-		By("waiting for the manager rollout after patch")
-		Eventually(func() (string, error) {
-			return utils.Run(exec.Command("kubectl", "-n", "tor-gateway-system",
-				"rollout", "status", "deployment/tor-gateway-controller-manager", "--timeout=30s"))
-		}, "2m", "5s").Should(ContainSubstring("successfully rolled out"))
+	By("creating the HA test namespace")
+	runOrSkipExisting("kubectl", "create", "ns", ns)
 
-		By("creating the HA test namespace")
-		runOrSkipExisting("kubectl", "create", "ns", obpNS)
+	By("copying the chutney fragment into the HA namespace")
+	copyChutneyFragmentTo(ns)
 
-		By("copying the chutney fragment into the HA namespace")
-		copyChutneyFragmentTo(obpNS)
-
-		By("installing the tor-gateway GatewayClass for HA tests")
-		applyYAML(fmt.Sprintf(`
+	By("installing the tor-gateway GatewayClass for HA tests")
+	applyYAML(fmt.Sprintf(`
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
   name: %s
 spec:
   controllerName: torgateway.io/gateway-controller
-`, obpGwClass))
+`, gwClass))
 
-		By("generating and storing the master ed25519 key Secret")
-		kp, err := tor.GenerateKeyPair(rand.Reader)
-		Expect(err).NotTo(HaveOccurred(), "generate master key")
-		secretKey := base64.StdEncoding.EncodeToString(kp.SecretKeyFile())
-		publicKey := base64.StdEncoding.EncodeToString(kp.PublicKeyFile())
-		masterOnion = kp.OnionAddress().String()
-		applyYAML(fmt.Sprintf(`
+	By("generating and storing the master ed25519 key Secret")
+	kp, err := tor.GenerateKeyPair(rand.Reader)
+	Expect(err).NotTo(HaveOccurred(), "generate master key")
+	secretKey := base64.StdEncoding.EncodeToString(kp.SecretKeyFile())
+	publicKey := base64.StdEncoding.EncodeToString(kp.PublicKeyFile())
+	masterOnion = kp.OnionAddress().String()
+	applyYAML(fmt.Sprintf(`
 apiVersion: v1
 kind: Secret
 metadata:
@@ -118,18 +124,18 @@ type: Opaque
 data:
   hs_ed25519_secret_key: %s
   hs_ed25519_public_key: %s
-`, masterSecret, obpNS, secretKey, publicKey))
+`, masterSecretName, ns, secretKey, publicKey))
 
-		By("deploying two http-echo backends for path-based routing")
-		applyYAML(fmt.Sprintf(`
+	By("deploying two http-echo backends for path-based routing")
+	applyYAML(fmt.Sprintf(`
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: ha-backend-a, namespace: %[1]s }
+metadata: { name: %[2]s, namespace: %[1]s }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: ha-backend-a } }
+  selector: { matchLabels: { app: %[2]s } }
   template:
-    metadata: { labels: { app: ha-backend-a } }
+    metadata: { labels: { app: %[2]s } }
     spec:
       containers:
       - name: echo
@@ -139,19 +145,19 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: ha-backend-a, namespace: %[1]s }
+metadata: { name: %[2]s, namespace: %[1]s }
 spec:
-  selector: { app: ha-backend-a }
+  selector: { app: %[2]s }
   ports: [{ port: 5678, targetPort: 5678 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: ha-backend-b, namespace: %[1]s }
+metadata: { name: %[3]s, namespace: %[1]s }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: ha-backend-b } }
+  selector: { matchLabels: { app: %[3]s } }
   template:
-    metadata: { labels: { app: ha-backend-b } }
+    metadata: { labels: { app: %[3]s } }
     spec:
       containers:
       - name: echo
@@ -161,25 +167,25 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: ha-backend-b, namespace: %[1]s }
+metadata: { name: %[3]s, namespace: %[1]s }
 spec:
-  selector: { app: ha-backend-b }
+  selector: { app: %[3]s }
   ports: [{ port: 5678, targetPort: 5678 }]
-`, obpNS))
+`, ns, backendA, backendB))
 
-		By("waiting for app backends to be Available")
-		for _, d := range []string{"ha-backend-a", "ha-backend-b"} {
-			_, err := utils.Run(exec.Command("kubectl", "-n", obpNS,
-				"rollout", "status", "deployment/"+d, "--timeout=120s"))
-			Expect(err).NotTo(HaveOccurred(), "app backend %s not ready", d)
-		}
+	By("waiting for app backends to be Available")
+	for _, d := range []string{backendA, backendB} {
+		_, err := utils.Run(exec.Command("kubectl", "-n", ns,
+			"rollout", "status", "deployment/"+d, "--timeout=120s"))
+		Expect(err).NotTo(HaveOccurred(), "app backend %s not ready", d)
+	}
 
-		By("applying Gateway + OnionBalancePolicy (3 backends) + two-rule HTTPRoute")
-		applyYAML(fmt.Sprintf(`
+	By("applying Gateway + OnionBalancePolicy (3 backends) + two-rule HTTPRoute")
+	applyYAML(fmt.Sprintf(`
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: ha-gw
+  name: %[3]s
   namespace: %[1]s
 spec:
   gatewayClassName: %[2]s
@@ -189,60 +195,82 @@ spec:
 apiVersion: policy.torgateway.io/v1alpha1
 kind: OnionBalancePolicy
 metadata:
-  name: ha-obp
+  name: %[4]s
   namespace: %[1]s
 spec:
   targetRefs:
-  - { group: gateway.networking.k8s.io, kind: Gateway, name: ha-gw }
+  - { group: gateway.networking.k8s.io, kind: Gateway, name: %[3]s }
   replicas: 3
   masterKeySecretRef:
-    name: %[3]s
+    name: %[5]s
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: ha-route
+  name: %[6]s
   namespace: %[1]s
 spec:
-  parentRefs: [{ name: ha-gw }]
+  parentRefs: [{ name: %[3]s }]
   rules:
   - matches: [{ path: { type: PathPrefix, value: /api } }]
-    backendRefs: [{ name: ha-backend-b, port: 5678 }]
+    backendRefs: [{ name: %[8]s, port: 5678 }]
   - matches: [{ path: { type: PathPrefix, value: / } }]
-    backendRefs: [{ name: ha-backend-a, port: 5678 }]
-`, obpNS, obpGwClass, masterSecret))
+    backendRefs: [{ name: %[7]s, port: 5678 }]
+`, ns, gwClass, gwName, obpName, masterSecretName, routeName, backendA, backendB))
 
-		By("waiting for the frontend Deployment to become Available")
-		Eventually(func() (string, error) {
-			return utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "deployment", "ha-gw-frontend",
-				"-o", "jsonpath={.status.conditions[?(@.type==\"Available\")].status}"))
-		}, "5m", "5s").Should(Equal("True"), "frontend Deployment never became Available")
+	By("waiting for the frontend Deployment to become Available")
+	Eventually(func() (string, error) {
+		return utils.Run(exec.Command("kubectl", "-n", ns, "get", "deployment", gwName+"-frontend",
+			"-o", "jsonpath={.status.conditions[?(@.type==\"Available\")].status}"))
+	}, "5m", "5s").Should(Equal("True"), "frontend Deployment never became Available")
 
-		By("waiting for Gateway.status.addresses to publish the master .onion")
-		Eventually(func() string {
-			out, _ := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "gateway", "ha-gw",
-				"-o", "jsonpath={.status.addresses[0].value}"))
-			return strings.TrimSpace(out)
-		}, "60s", "2s").Should(Equal(masterOnion),
-			"Gateway should publish the pre-seeded master .onion address")
+	By("waiting for Gateway.status.addresses to publish the master .onion")
+	Eventually(func() string {
+		out, _ := utils.Run(exec.Command("kubectl", "-n", ns, "get", "gateway", gwName,
+			"-o", "jsonpath={.status.addresses[0].value}"))
+		return strings.TrimSpace(out)
+	}, "60s", "2s").Should(Equal(masterOnion),
+		"Gateway should publish the pre-seeded master .onion address")
 
-		By("deploying an in-cluster Tor SOCKS client for fetching the .onion")
-		applyYAML(chutneyTorClientPodYAML(obpNS, "ha-tor-client"))
+	By("deploying an in-cluster Tor SOCKS client for fetching the .onion")
+	applyYAML(chutneyTorClientPodYAML(ns, torClientPod))
 
-		_, err = utils.Run(exec.Command("kubectl", "-n", obpNS,
-			"wait", "--for=condition=Ready", "pod/ha-tor-client", "--timeout=120s"))
-		Expect(err).NotTo(HaveOccurred(), "ha-tor-client pod not ready")
+	_, err = utils.Run(exec.Command("kubectl", "-n", ns,
+		"wait", "--for=condition=Ready", "pod/"+torClientPod, "--timeout=120s"))
+	Expect(err).NotTo(HaveOccurred(), "%s pod not ready", torClientPod)
+
+	return masterOnion
+}
+
+// teardownModeBFixture removes everything modeBFixture created.
+func teardownModeBFixture(ns, gwClass string) {
+	if os.Getenv("TOR_GATEWAY_E2E_NO_TEARDOWN") == "1" {
+		fmt.Printf("\n[debug] keeping ns %s + gatewayclass %s (TOR_GATEWAY_E2E_NO_TEARDOWN=1)\n", ns, gwClass)
+		return
+	}
+	_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", ns, "--ignore-not-found", "--wait=false"))
+	_, _ = utils.Run(exec.Command("kubectl", "delete", "gatewayclass", gwClass, "--ignore-not-found"))
+}
+
+var _ = Describe("OnionBalance HA — happy path", Ordered, Label("onionbalance"), func() {
+	var masterOnion string
+
+	BeforeAll(func() {
+		masterOnion = modeBFixture("tor-gateway-ha", "ha-gw-class", "ha-gw")
 	})
 
 	AfterAll(func() {
-		if os.Getenv("TOR_GATEWAY_E2E_NO_TEARDOWN") == "1" {
-			fmt.Printf("\n[debug] keeping ns %s + gatewayclass %s (TOR_GATEWAY_E2E_NO_TEARDOWN=1)\n", obpNS, obpGwClass)
-			return
-		}
-		By("removing HA test namespace and GatewayClass")
-		_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", obpNS, "--ignore-not-found", "--wait=false"))
-		_, _ = utils.Run(exec.Command("kubectl", "delete", "gatewayclass", obpGwClass, "--ignore-not-found"))
+		teardownModeBFixture("tor-gateway-ha", "ha-gw-class")
 	})
+
+	fetchOverTor := func(pod, path string) func() string {
+		return func() string {
+			out, _ := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha", "exec", pod, "-c", "curl", "--",
+				"curl", "-s", "--max-time", "30", "--socks5-hostname", "127.0.0.1:9050",
+				"http://"+masterOnion+path))
+			return strings.TrimSpace(out)
+		}
+	}
 
 	It("routes by path to the correct backend over the master .onion", func() {
 		By("fetching / over Tor via onionbalance -> backend-A (waits for HS descriptor propagation)")
@@ -257,56 +285,18 @@ spec:
 			Should(Equal("backend-B"), "/api should route to backend-B via the master .onion")
 	})
 
-	It("remains reachable after a backend pod is killed", Label("onionbalance", "ob-failover"), func() {
-		By("deleting one backend StatefulSet pod")
-		out, _ := utils.Run(exec.Command("kubectl", "-n", obpNS,
-			"get", "pods", "-l", "torgateway.io/role=backend",
-			"-o", "jsonpath={.items[0].metadata.name}"))
-		podName := strings.TrimSpace(out)
-		Expect(podName).NotTo(BeEmpty(), "expected at least one backend pod to exist")
-
-		_, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "delete", "pod", podName, "--wait=false"))
-		Expect(err).NotTo(HaveOccurred(), "delete backend pod %s", podName)
-
-		By("verifying the master .onion still serves / after pod kill")
-		Eventually(fetchOverTor("ha-tor-client", "/"), "1m", "5s").
-			Should(Equal("backend-A"), "service should remain up after one pod kill")
-	})
-
-	It("remains reachable after scaling replicas from 3 to 1", Label("onionbalance", "ob-failover"), func() {
-		By("patching OnionBalancePolicy replicas: 3 → 1")
-		_, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "patch", "onionbalancepolicy", "ha-obp",
-			"--type=merge", "-p", `{"spec":{"replicas":1}}`))
-		Expect(err).NotTo(HaveOccurred(), "patch OBP replicas to 1")
-
-		By("waiting for the StatefulSet to scale down to 1")
-		Eventually(func() (string, error) {
-			return utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "statefulset", "ha-gw-backend",
-				"-o", "jsonpath={.status.readyReplicas}"))
-		}, "3m", "5s").Should(Equal("1"), "StatefulSet should scale down to 1 ready replica")
-
-		By("verifying the master .onion still serves / after scale-down")
-		// Budget covers: obrefresh interval (30s) + SIGHUP + OB re-renders
-		// descriptor with the smaller backend set + HSDir publish (testnet
-		// publish-check 10s) + client re-lookup (testnet fetch 20s).
-		// Typical ~90s on warm Mac, more headroom for cold CI runners.
-		Eventually(fetchOverTor("ha-tor-client", "/"), "5m", "10s").
-			Should(Equal("backend-A"), "service should remain up after scale to 1 replica")
-	})
-
 	// Task 10: Mode B per-pod key isolation.
-	// Requires replicas=3; the prior spec scaled to 1, so we scale back up first.
-	It("isolates per-pod keys: a backend's tor container only sees its own onion key", Label("onionbalance"), func() {
+	It("isolates per-pod keys: a backend's tor container only sees its own onion key", func() {
 		const taskReplicas = 3
 
 		By("restoring OBP replicas to 3 for key-isolation assertions")
-		_, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "patch", "onionbalancepolicy", "ha-obp",
+		_, err := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha", "patch", "onionbalancepolicy", "ha-gw-obp",
 			"--type=merge", "-p", `{"spec":{"replicas":3}}`))
 		Expect(err).NotTo(HaveOccurred(), "patch OBP replicas back to 3")
 
 		By("waiting for the StatefulSet to reach 3 ready replicas")
 		Eventually(func() string {
-			out, _ := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "statefulset", "ha-gw-backend",
+			out, _ := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha", "get", "statefulset", "ha-gw-backend",
 				"-o", "jsonpath={.status.readyReplicas}"))
 			return strings.TrimSpace(out)
 		}, 5*time.Minute, 5*time.Second).Should(Equal("3"), "StatefulSet should reach 3 ready replicas")
@@ -317,13 +307,13 @@ spec:
 			By(fmt.Sprintf("hashing the on-disk secret key in %s", podName))
 			// HiddenServiceDir is /var/lib/tor/hs/hs (hsServiceDir). tor-init writes
 			// the key pair there from the pod's own per-pod Secret (ha-gw-backend-{i}-keys).
-			onDiskOut, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "exec", podName, "-c", "tor", "--",
+			onDiskOut, err := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha", "exec", podName, "-c", "tor", "--",
 				"sh", "-c", `sha256sum /var/lib/tor/hs/hs/hs_ed25519_secret_key | awk '{print $1}'`))
 			Expect(err).NotTo(HaveOccurred(), "sha256sum on-disk key in pod %s", podName)
 			secretHashOnDisk := strings.TrimSpace(onDiskOut)
 
 			By(fmt.Sprintf("hashing the corresponding Secret's bytes for pod %d", i))
-			b64Out, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "secret",
+			b64Out, err := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha", "get", "secret",
 				fmt.Sprintf("ha-gw-backend-%d-keys", i),
 				"-o", "jsonpath={.data.hs_ed25519_secret_key}"))
 			Expect(err).NotTo(HaveOccurred(), "fetch Secret ha-gw-backend-%d-keys", i)
@@ -339,33 +329,91 @@ spec:
 			// ed25519 key files is the right negative check given that there
 			// is no per-backend-index subdirectory — tor-init writes the single
 			// pair directly into /var/lib/tor/hs/hs/.
-			lsOut, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "exec", podName, "-c", "tor", "--",
+			lsOut, err := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha", "exec", podName, "-c", "tor", "--",
 				"sh", "-c", `find /var/lib/tor/hs/hs -maxdepth 1 -name 'hs_ed25519_*' | wc -l`))
 			Expect(err).NotTo(HaveOccurred(), "list hs dir in pod %s", podName)
 			Expect(strings.TrimSpace(lsOut)).To(Equal("2"),
 				"pod %s should have exactly 2 hs_ed25519_* files (secret + public key)", podName)
 		}
 	})
+})
+
+var _ = Describe("OnionBalance HA — mutations", Ordered, Label("onionbalance", "ob-failover"), func() {
+	var masterOnion string
+
+	BeforeAll(func() {
+		masterOnion = modeBFixture("tor-gateway-ha-mut", "ha-gw-mut-class", "ha-gw-mut")
+	})
+
+	AfterAll(func() {
+		teardownModeBFixture("tor-gateway-ha-mut", "ha-gw-mut-class")
+	})
+
+	fetchOverTor := func(pod, path string) func() string {
+		return func() string {
+			out, _ := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha-mut", "exec", pod, "-c", "curl", "--",
+				"curl", "-s", "--max-time", "30", "--socks5-hostname", "127.0.0.1:9050",
+				"http://"+masterOnion+path))
+			return strings.TrimSpace(out)
+		}
+	}
+
+	It("remains reachable after a backend pod is killed", func() {
+		By("deleting one backend StatefulSet pod")
+		out, _ := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha-mut",
+			"get", "pods", "-l", "torgateway.io/role=backend",
+			"-o", "jsonpath={.items[0].metadata.name}"))
+		podName := strings.TrimSpace(out)
+		Expect(podName).NotTo(BeEmpty(), "expected at least one backend pod to exist")
+
+		_, err := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha-mut", "delete", "pod", podName, "--wait=false"))
+		Expect(err).NotTo(HaveOccurred(), "delete backend pod %s", podName)
+
+		By("verifying the master .onion still serves / after pod kill")
+		Eventually(fetchOverTor("ha-gw-mut-tor-client", "/"), "1m", "5s").
+			Should(Equal("backend-A"), "service should remain up after one pod kill")
+	})
+
+	It("remains reachable after scaling replicas from 3 to 1", func() {
+		By("patching OnionBalancePolicy replicas: 3 → 1")
+		_, err := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha-mut", "patch", "onionbalancepolicy", "ha-gw-mut-obp",
+			"--type=merge", "-p", `{"spec":{"replicas":1}}`))
+		Expect(err).NotTo(HaveOccurred(), "patch OBP replicas to 1")
+
+		By("waiting for the StatefulSet to scale down to 1")
+		Eventually(func() (string, error) {
+			return utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha-mut", "get", "statefulset", "ha-gw-mut-backend",
+				"-o", "jsonpath={.status.readyReplicas}"))
+		}, "3m", "5s").Should(Equal("1"), "StatefulSet should scale down to 1 ready replica")
+
+		By("verifying the master .onion still serves / after scale-down")
+		// Budget covers: obrefresh interval (30s) + SIGHUP + OB re-renders
+		// descriptor with the smaller backend set + HSDir publish (testnet
+		// publish-check 10s) + client re-lookup (testnet fetch 20s).
+		// Typical ~90s on warm Mac, more headroom for cold CI runners.
+		Eventually(fetchOverTor("ha-gw-mut-tor-client", "/"), "5m", "10s").
+			Should(Equal("backend-A"), "service should remain up after scale to 1 replica")
+	})
 
 	// Task 11: SIGHUP reload on scale-up.
-	// Runs after Task 10 which restores replicas to 3; patches OBP to 4.
-	It("reloads onionbalance via SIGHUP when backends scale up", Label("onionbalance", "ob-failover"), func() {
-		By("patching OBP replicas: 3 → 4")
-		_, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "patch", "onionbalancepolicy", "ha-obp",
+	// Runs after scale-down to 1; patches OBP to 4.
+	It("reloads onionbalance via SIGHUP when backends scale up", func() {
+		By("patching OBP replicas: 1 → 4")
+		_, err := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha-mut", "patch", "onionbalancepolicy", "ha-gw-mut-obp",
 			"--type=merge", "-p", `{"spec":{"replicas":4}}`))
 		Expect(err).NotTo(HaveOccurred(), "patch OBP replicas to 4")
 
 		By("waiting for backend-3 pod to be Running")
 		Eventually(func() string {
-			out, _ := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "pod", "ha-gw-backend-3",
+			out, _ := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha-mut", "get", "pod", "ha-gw-mut-backend-3",
 				"-o", "jsonpath={.status.phase}"))
 			return strings.TrimSpace(out)
 		}, 5*time.Minute, 5*time.Second).Should(Equal("Running"),
-			"ha-gw-backend-3 pod should reach Running phase")
+			"ha-gw-mut-backend-3 pod should reach Running phase")
 
 		By("waiting for the StatefulSet to reach 4 ready replicas")
 		Eventually(func() string {
-			out, _ := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "statefulset", "ha-gw-backend",
+			out, _ := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-ha-mut", "get", "statefulset", "ha-gw-mut-backend",
 				"-o", "jsonpath={.status.readyReplicas}"))
 			return strings.TrimSpace(out)
 		}, 5*time.Minute, 5*time.Second).Should(Equal("4"),
@@ -380,13 +428,26 @@ spec:
 		// Budget: obrefresh poll interval (default 30s) + SIGHUP latency +
 		// OB descriptor publish on chutney testnet (publish-check 10s) +
 		// client re-lookup (testnet fetch cycle 20s).
-		Eventually(fetchOverTor("ha-tor-client", "/"), 5*time.Minute, 10*time.Second).
+		Eventually(fetchOverTor("ha-gw-mut-tor-client", "/"), 5*time.Minute, 10*time.Second).
 			Should(Equal("backend-A"),
 				"master .onion should remain reachable after scale-up to 4 backends")
 	})
+})
+
+var _ = Describe("OnionBalance HA — cross-NS + NetworkPolicy", Ordered, Label("onionbalance"), func() {
+	BeforeAll(func() {
+		// NP-coverage spec observes the ha-gw fixture. The cross-NS spec is
+		// self-contained — creates its own ha-master-secrets / tor-gateway-ha-crossns
+		// namespaces in its body, doesn't depend on this fixture.
+		_ = modeBFixture("tor-gateway-ha", "ha-gw-class", "ha-gw")
+	})
+
+	AfterAll(func() {
+		teardownModeBFixture("tor-gateway-ha", "ha-gw-class")
+	})
 
 	// Task 12: Cross-NS master Secret via ReferenceGrant.
-	It("supports a master Secret in a different namespace via ReferenceGrant", Label("onionbalance", "ob-crossns"), func() {
+	It("supports a master Secret in a different namespace via ReferenceGrant", Label("ob-crossns"), func() {
 		const (
 			crossNSGWClass = "tor-gateway-ha-crossns"
 			crossGWName    = "blog-cross"
