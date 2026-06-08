@@ -4,7 +4,7 @@
 # Runtime layer is debian:bookworm-slim + tor + Python 3 + the chutney
 # checkout. Fixed UID 65532; the entrypoint writes only into
 # CHUTNEY_DATA_DIR (an emptyDir at runtime).
-FROM debian:bookworm-slim AS build
+FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS build
 ARG CHUTNEY_REF=62b54a55215c94eb14adc22c5acd17b2ada04b76
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
@@ -12,7 +12,7 @@ RUN apt-get update \
  && git clone https://github.com/torproject/chutney /chutney \
  && cd /chutney && git checkout ${CHUTNEY_REF}
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb
 LABEL org.opencontainers.image.source="https://github.com/chimbosonic/tor-gateway"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.title="tor-gateway/chutney"
