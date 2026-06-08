@@ -133,10 +133,17 @@ test-e2e-suite: setup-test-e2e manifests generate fmt vet ## Run a label-filtere
 		exit 2; \
 	fi
 	@echo "Running e2e suite with label-filter=$$E2E_LABEL_FILTER"
+	flake_attempts="$${E2E_FLAKE_ATTEMPTS:-1}"; \
+	if [ "$$flake_attempts" -gt 1 ]; then \
+		flake_flag="-ginkgo.flake-attempts=$$flake_attempts"; \
+	else \
+		flake_flag=""; \
+	fi; \
 	TOR_GATEWAY_E2E_MODE=chutney KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) CERT_MANAGER_INSTALL_SKIP=true \
 		go test -tags=e2e -timeout 30m ./test/e2e/ -v -ginkgo.v \
 		-ginkgo.label-filter="$$E2E_LABEL_FILTER" \
-		-ginkgo.json-report=ginkgo-report.json
+		-ginkgo.json-report=ginkgo-report.json \
+		$$flake_flag
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: test-e2e-realtor
