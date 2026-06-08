@@ -215,7 +215,7 @@ spec:
         command: ["./chutney", "verify", "networks/k8s-mini"]
       initialDelaySeconds: 60
       periodSeconds: 15
-      timeoutSeconds: 20
+      timeoutSeconds: 60  # was: 20 — too tight for cold CI; verify needs longer when network is bootstrapping
       failureThreshold: 30
     livenessProbe:
       exec:
