@@ -193,3 +193,47 @@ func TestBackendsFromSecrets_RequiresOwnerReference(t *testing.T) {
 		t.Errorf("expected 0 addrs (no controller ownerRef), got %d", len(addrs))
 	}
 }
+
+func TestRebuild_EmptyBackends_WritesEmptyConfigAndSighups(t *testing.T) {
+	dir := t.TempDir()
+	master := mustKeyPair(t).OnionAddress()
+
+	cfgPath := filepath.Join(dir, "config.yaml")
+	pidPath := filepath.Join(dir, "ob.pid")
+	masterKeyPath := filepath.Join(dir, "master_sk")
+
+	// Pre-seed config.yaml with a stale 3-backend list.
+	_ = os.WriteFile(cfgPath, []byte("services:\n- instances:\n  - x.onion\n  - y.onion\n  - z.onion\n"), 0o600)
+	// Use an unlikely-to-exist PID so sighupPID's syscall.Kill returns ESRCH —
+	// the test verifies the config file is overwritten regardless of SIGHUP outcome.
+	_ = os.WriteFile(pidPath, []byte("99999999\n"), 0o600)
+
+	ref, err := NewRefresher(context.Background(), RefresherConfig{
+		GatewayName:      "blog",
+		GatewayNamespace: "prod",
+		MasterKeyPath:    masterKeyPath,
+		ConfigPath:       cfgPath,
+		PIDFile:          pidPath,
+		Interval:         5 * time.Millisecond,
+		Master:           master,
+		OwnerUID:         testGatewayUID,
+		Client:           fake.NewClientset(),
+	})
+	if err != nil {
+		t.Fatalf("NewRefresher: %v", err)
+	}
+
+	ref.rebuild(context.Background(), nil) // 0 backends
+
+	out, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("config.yaml not written: %v", err)
+	}
+	s := string(out)
+	if strings.Contains(s, "x.onion") || strings.Contains(s, "y.onion") || strings.Contains(s, "z.onion") {
+		t.Errorf("stale backends still in config.yaml after empty rebuild: %s", s)
+	}
+	if !strings.Contains(s, "instances: []") {
+		t.Errorf("expected empty-backend config with 'instances: []'; got %s", s)
+	}
+}

@@ -166,14 +166,6 @@ func (r *Refresher) fire() {
 // Exposed for tests; production calls go through schedule()→fire().
 func (r *Refresher) rebuild(_ context.Context, objs []any) {
 	backends := backendsFromSecrets(objs, r.cfg.OwnerUID)
-	if len(backends) == 0 {
-		// Onionbalance refuses to start on an empty instances list and
-		// the entrypoint script blocks waiting for at least one backend.
-		// Skipping the write keeps the file absent until we have real
-		// content, which matches what the entrypoint is waiting for.
-		slog.Info("onionbalance config skip: no ready backends yet")
-		return
-	}
 	rendered, err := Render(r.cfg.Master, backends, r.cfg.MasterKeyPath)
 	if err != nil {
 		slog.Error("onionbalance render failed", "err", err)
