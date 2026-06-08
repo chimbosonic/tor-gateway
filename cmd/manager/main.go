@@ -143,9 +143,13 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	if onionbalanceImage == "" || obrefreshImage == "" || torImage == "" || initImage == "" {
-		fmt.Fprintln(os.Stderr, "fatal: --onionbalance-image, --obrefresh-image, --tor-image, --tor-init-image are required")
+	if torImage == "" || initImage == "" {
+		fmt.Fprintln(os.Stderr, "fatal: --tor-image and --tor-init-image are required")
 		os.Exit(2)
+	}
+	if onionbalanceImage == "" || obrefreshImage == "" {
+		setupLog.Info("Mode B disabled: --onionbalance-image and/or --obrefresh-image not set; " +
+			"OnionBalancePolicy reconciles will fail until these are provided")
 	}
 
 	var clusterPodCIDRs []string
