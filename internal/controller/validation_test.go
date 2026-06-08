@@ -206,10 +206,10 @@ var _ = Describe("CRD validation", func() {
 			mustFail(obj, "should be greater than or equal to 1")
 		})
 
-		It("rejects replicas=9 (above the cap of 8)", func() {
+		It("rejects replicas=13 (above the cap of 12)", func() {
 			obj := base("obp-too-many")
-			obj.Spec.Replicas = 9
-			mustFail(obj, "should be less than or equal to 8")
+			obj.Spec.Replicas = 13
+			mustFail(obj, "should be less than or equal to 12")
 		})
 
 		It("rejects missing masterKeySecretRef.name", func() {

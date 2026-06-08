@@ -56,12 +56,12 @@ type OnionBalancePolicySpec struct {
 	TargetRefs []gwv1.LocalPolicyTargetReference `json:"targetRefs"`
 
 	// Replicas is the number of backend Tor instances that publish
-	// introduction points behind the master onion address. Capped at 8
-	// to match the onionbalance-config generator default; the Tor spec
-	// ceiling at the current N_INTROS_PER_INSTANCE=2 is 10 backends.
+	// introduction points behind the master onion address. Capped at 12
+	// for v0.4.x compat with stored objects created against the old schema;
+	// tighten in v0.5.
 	//
 	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=8
+	// +kubebuilder:validation:Maximum=12
 	// +kubebuilder:default=3
 	// +required
 	Replicas int32 `json:"replicas"`

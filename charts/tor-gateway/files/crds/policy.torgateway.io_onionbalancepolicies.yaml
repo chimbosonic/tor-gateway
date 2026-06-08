@@ -217,11 +217,11 @@ spec:
                   default: 3
                   description: |-
                     Replicas is the number of backend Tor instances that publish
-                    introduction points behind the master onion address. Capped at 8
-                    to match the onionbalance-config generator default; the Tor spec
-                    ceiling at the current N_INTROS_PER_INSTANCE=2 is 10 backends.
+                    introduction points behind the master onion address. Capped at 12
+                    for v0.4.x compat with stored objects created against the old schema;
+                    tighten in v0.5.
                   format: int32
-                  maximum: 8
+                  maximum: 12
                   minimum: 1
                   type: integer
                 targetRefs:
