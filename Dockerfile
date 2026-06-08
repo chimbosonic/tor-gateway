@@ -6,9 +6,10 @@
 # Built and tagged by `make images` for podman; equivalent under docker buildx.
 
 ARG GO_VERSION=1.26
+ARG GOLANG_DIGEST=sha256:68cb6d68bed024785b69195b89af7ac7a444f27791435f98647edff595aa0479
 ARG DISTROLESS_DIGEST=sha256:c0f429e16b13e583da7e5a6ec20dd656d325d88e6819cafe0adb0828976529dcdd
 
-FROM golang:${GO_VERSION} AS builder
+FROM golang:${GO_VERSION}@${GOLANG_DIGEST} AS builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG BINARY=manager
