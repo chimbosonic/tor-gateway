@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -256,10 +257,11 @@ func (r *OnionBalancePolicyReconciler) obpsForSecret(ctx context.Context, obj cl
 			continue
 		}
 		// Also requeue when the Secret looks like a backend key Secret owned by a Gateway the OBP targets.
-		if s.Labels["torgateway.io/role"] == "backend" && s.Labels["torgateway.io/gateway"] != "" {
+		if s.Labels[haRoleKey] == haRoleBackend && s.Labels[gatewayLabelKey] != "" {
 			for _, ref := range p.Spec.TargetRefs {
-				if string(ref.Name) == s.Labels["torgateway.io/gateway"] && s.Namespace == p.Namespace {
+				if string(ref.Name) == s.Labels[gatewayLabelKey] && s.Namespace == p.Namespace {
 					out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}})
+					break
 				}
 			}
 		}
@@ -282,6 +284,7 @@ func (r *OnionBalancePolicyReconciler) obpsForGateway(ctx context.Context, obj c
 		for _, ref := range list.Items[i].Spec.TargetRefs {
 			if string(ref.Name) == gw.Name {
 				out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace}})
+				break
 			}
 		}
 	}
@@ -332,10 +335,9 @@ func (r *OnionBalancePolicyReconciler) obpsForTorServicePolicy(ctx context.Conte
 	var out []reconcile.Request
 	for i := range list.Items {
 		for _, ref := range list.Items[i].Spec.TargetRefs {
-			for _, n := range gwNames {
-				if string(ref.Name) == n {
-					out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace}})
-				}
+			if slices.Contains(gwNames, string(ref.Name)) {
+				out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace}})
+				break
 			}
 		}
 	}

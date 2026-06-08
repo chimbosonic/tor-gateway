@@ -432,7 +432,10 @@ func assertOBPAccepted(pol *policyv1alpha1.OnionBalancePolicy, status metav1.Con
 	Fail("onionbalance policy ancestor missing Accepted condition")
 }
 
-const testOBPName = "blog-obp"
+const (
+	testOBPName      = "blog-obp"
+	testOBPNamespace = "default"
+)
 
 func TestOnionBalancePolicyReconciler_WatchSecretRequeuesOBP(t *testing.T) {
 	obp := &policyv1alpha1.OnionBalancePolicy{
@@ -449,7 +452,7 @@ func TestOnionBalancePolicyReconciler_WatchSecretRequeuesOBP(t *testing.T) {
 
 	r := &OnionBalancePolicyReconciler{Client: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obp, secret).Build()}
 	reqs := r.obpsForSecret(context.Background(), secret)
-	if len(reqs) != 1 || reqs[0].Name != testOBPName {
+	if len(reqs) != 1 || reqs[0].Name != testOBPName || reqs[0].Namespace != testOBPNamespace {
 		t.Fatalf("expected 1 request for blog-obp, got %+v", reqs)
 	}
 }
@@ -489,7 +492,7 @@ func TestOnionBalancePolicyReconciler_WatchGatewayRequeuesOBP(t *testing.T) {
 
 	r := &OnionBalancePolicyReconciler{Client: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obp).Build()}
 	reqs := r.obpsForGateway(context.Background(), gw)
-	if len(reqs) != 1 || reqs[0].Name != testOBPName {
+	if len(reqs) != 1 || reqs[0].Name != testOBPName || reqs[0].Namespace != testOBPNamespace {
 		t.Fatalf("expected 1 request for blog-obp, got %+v", reqs)
 	}
 }
@@ -545,7 +548,7 @@ func TestOnionBalancePolicyReconciler_WatchReferenceGrantRequeuesOBP(t *testing.
 
 	r := &OnionBalancePolicyReconciler{Client: fake.NewClientBuilder().WithScheme(testSchemeWithGrants(t)).WithObjects(obp).Build()}
 	reqs := r.obpsForReferenceGrant(context.Background(), rg)
-	if len(reqs) != 1 || reqs[0].Name != testOBPName {
+	if len(reqs) != 1 || reqs[0].Name != testOBPName || reqs[0].Namespace != testOBPNamespace {
 		t.Fatalf("expected 1 request for blog-obp, got %+v", reqs)
 	}
 }
@@ -605,7 +608,7 @@ func TestOnionBalancePolicyReconciler_WatchTorServicePolicyRequeuesOBP(t *testin
 
 	r := &OnionBalancePolicyReconciler{Client: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obp).Build()}
 	reqs := r.obpsForTorServicePolicy(context.Background(), tsp)
-	if len(reqs) != 1 || reqs[0].Name != testOBPName {
+	if len(reqs) != 1 || reqs[0].Name != testOBPName || reqs[0].Namespace != testOBPNamespace {
 		t.Fatalf("expected 1 request for blog-obp, got %+v", reqs)
 	}
 }
@@ -635,5 +638,37 @@ func TestOnionBalancePolicyReconciler_WatchTorServicePolicyNoMatchRequeuesNothin
 	reqs := r.obpsForTorServicePolicy(context.Background(), tsp)
 	if len(reqs) != 0 {
 		t.Fatalf("expected 0 requests, got %+v", reqs)
+	}
+}
+
+func TestOnionBalancePolicyReconciler_WatchBackendSecretRequeuesOBP(t *testing.T) {
+	// OBP targeting "blog" Gateway, with master Secret "ob-master".
+	obp := &policyv1alpha1.OnionBalancePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: testOBPName, Namespace: testOBPNamespace},
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "ob-master"},
+			TargetRefs: []gwv1.LocalPolicyTargetReference{
+				{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "blog"},
+			},
+			Replicas: 3,
+		},
+	}
+	// A backend key Secret with role=backend, gateway=blog labels.
+	// Its name deliberately does NOT match MasterKeySecretRef.Name.
+	backendSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "blog-backend-0-keys",
+			Namespace: testOBPNamespace,
+			Labels: map[string]string{
+				haRoleKey:       haRoleBackend,
+				gatewayLabelKey: "blog",
+			},
+		},
+	}
+
+	r := &OnionBalancePolicyReconciler{Client: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obp).Build()}
+	reqs := r.obpsForSecret(context.Background(), backendSecret)
+	if len(reqs) != 1 || reqs[0].Name != testOBPName || reqs[0].Namespace != testOBPNamespace {
+		t.Fatalf("expected 1 request for %s/%s, got %+v", testOBPNamespace, testOBPName, reqs)
 	}
 }
