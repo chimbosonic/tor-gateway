@@ -894,11 +894,12 @@ func (r *GatewayReconciler) ensureHADeployment(ctx context.Context, want *appsv1
 	return err
 }
 
+const (
+	annLastReplicas = "torgateway.io/last-known-replicas"
+	annPowEmitted   = "torgateway.io/pow-override-emitted"
+)
+
 func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gateway, master tor.OnionAddress, pol *policyv1alpha1.OnionBalancePolicy) error {
-	const (
-		annLastReplicas = "torgateway.io/last-known-replicas"
-		annPowEmitted   = "torgateway.io/pow-override-emitted"
-	)
 	prev := previousOnion(gw)
 	if prev != "" && prev != master.String() {
 		r.event(gw, corev1.EventTypeNormal, "MasterDescriptorChanged",
@@ -1105,11 +1106,11 @@ func (r *GatewayReconciler) cleanupModeBResources(ctx context.Context, gw *gwv1.
 			return err
 		}
 	}
-	_, hasReplicas := gw.Annotations["torgateway.io/last-known-replicas"]
-	_, hasPowEmitted := gw.Annotations["torgateway.io/pow-override-emitted"]
+	_, hasReplicas := gw.Annotations[annLastReplicas]
+	_, hasPowEmitted := gw.Annotations[annPowEmitted]
 	if hasReplicas || hasPowEmitted {
-		delete(gw.Annotations, "torgateway.io/last-known-replicas")
-		delete(gw.Annotations, "torgateway.io/pow-override-emitted")
+		delete(gw.Annotations, annLastReplicas)
+		delete(gw.Annotations, annPowEmitted)
 		if err := r.Update(ctx, gw); err != nil {
 			return fmt.Errorf("cleanupModeBResources: clear annotations: %w", err)
 		}

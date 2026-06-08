@@ -490,7 +490,7 @@ func TestCleanupModeBResources_NoUpdateWhenAnnotationsAbsent(t *testing.T) {
 func TestCleanupModeBResources_UpdatesWhenHAAnnotationsPresent(t *testing.T) {
 	gw := sampleGateway()
 	gw.Annotations = map[string]string{
-		"torgateway.io/last-known-replicas": "3",
+		annLastReplicas: "3",
 	}
 	cl := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(gw).Build()
 	// Read the stored object to get the RV the fake client assigned.
@@ -510,8 +510,8 @@ func TestCleanupModeBResources_UpdatesWhenHAAnnotationsPresent(t *testing.T) {
 	if got.ResourceVersion == rv {
 		t.Error("ResourceVersion unchanged; cleanup should Update when HA annotations are present")
 	}
-	if _, ok := got.Annotations["torgateway.io/last-known-replicas"]; ok {
-		t.Error("torgateway.io/last-known-replicas annotation should have been removed")
+	if _, ok := got.Annotations[annLastReplicas]; ok {
+		t.Errorf("%s annotation should have been removed", annLastReplicas)
 	}
 }
 
