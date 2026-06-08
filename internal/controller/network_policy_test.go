@@ -19,6 +19,8 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	"github.com/chimbosonic/tor-gateway/internal/tor"
 )
 
 func gwForNPTest() *gwv1.Gateway {
@@ -306,5 +308,37 @@ func TestNetworkPolicySelectorMatchesModeBPodLabels(t *testing.T) {
 		if !sel.Matches(labels.Set(podLabels)) {
 			t.Errorf("Mode B %s pod labels %v not matched by NP selector %v", role, podLabels, sel)
 		}
+	}
+}
+
+// TestNetworkPolicyMatchesRenderedModeBPods verifies the NP selector matches
+// the pod template labels produced by the actual builder functions, catching
+// any label drift between HALabels and the workload builders.
+func TestNetworkPolicyMatchesRenderedModeBPods(t *testing.T) {
+	gw := sampleGateway()
+	obp := samplePolicy(2)
+	np, err := BuildNetworkPolicy(gw, nil, nil, "", testScheme(t))
+	if err != nil {
+		t.Fatalf("BuildNetworkPolicy: %v", err)
+	}
+	sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
+	if err != nil {
+		t.Fatalf("LabelSelectorAsSelector: %v", err)
+	}
+
+	backend, err := BuildBackendStatefulSet(gw, obp, tor.OnionAddress{}, sampleImages(), testScheme(t))
+	if err != nil {
+		t.Fatalf("BuildBackendStatefulSet: %v", err)
+	}
+	frontend, err := BuildFrontendDeployment(gw, obp, tor.OnionAddress{}, sampleImages(), false, testScheme(t))
+	if err != nil {
+		t.Fatalf("BuildFrontendDeployment: %v", err)
+	}
+
+	if !sel.Matches(labels.Set(backend.Spec.Template.Labels)) {
+		t.Errorf("NP selector does not match backend pod template labels %v", backend.Spec.Template.Labels)
+	}
+	if !sel.Matches(labels.Set(frontend.Spec.Template.Labels)) {
+		t.Errorf("NP selector does not match frontend pod template labels %v", frontend.Spec.Template.Labels)
 	}
 }
