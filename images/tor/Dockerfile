@@ -5,8 +5,9 @@
 # a read-only root filesystem; Tor writes only to the operator's mounted
 # emptyDirs (DataDirectory, HiddenServiceDir).
 ARG ALPINE_VERSION=3.21
+ARG ALPINE_DIGEST=sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
 
-FROM alpine:${ALPINE_VERSION}
+FROM alpine:${ALPINE_VERSION}@${ALPINE_DIGEST}
 LABEL org.opencontainers.image.source="https://github.com/chimbosonic/tor-gateway"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.title="tor-gateway/tor"
