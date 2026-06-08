@@ -379,4 +379,115 @@ spec:
 			Should(Equal("backend-A"),
 				"master .onion should remain reachable after scale-up to 4 backends")
 	})
+
+	// Task 12: Cross-NS master Secret via ReferenceGrant.
+	It("supports a master Secret in a different namespace via ReferenceGrant", Label("onionbalance", "crossns"), func() {
+		const (
+			crossNSGWClass = "tor-gateway-ha-crossns"
+			crossGWName    = "blog-cross"
+			masterSecName  = "ob-master"
+		)
+		sourceNS := "ha-master-secrets"
+
+		By("creating the cross-NS secrets namespace")
+		_, err := utils.Run(exec.Command("kubectl", "create", "ns", sourceNS))
+		Expect(err).NotTo(HaveOccurred(), "create namespace %s", sourceNS)
+		DeferCleanup(func() {
+			_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", sourceNS, "--wait=false", "--ignore-not-found"))
+			_, _ = utils.Run(exec.Command("kubectl", "-n", obpNS, "delete", "gateway", crossGWName, "--ignore-not-found"))
+			_, _ = utils.Run(exec.Command("kubectl", "-n", obpNS, "delete", "onionbalancepolicy",
+				crossGWName+"-obp", "--ignore-not-found"))
+			_, _ = utils.Run(exec.Command("kubectl", "delete", "gatewayclass", crossNSGWClass, "--ignore-not-found"))
+		})
+
+		By("generating a master keypair and creating the Secret in sourceNS")
+		kp, kpErr := tor.GenerateKeyPair(rand.Reader)
+		Expect(kpErr).NotTo(HaveOccurred(), "generate cross-NS master keypair")
+		crossHostname := kp.OnionAddress().String()
+
+		applyYAML(fmt.Sprintf(`
+apiVersion: v1
+kind: Secret
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+type: Opaque
+data:
+  hs_ed25519_secret_key: %[3]s
+  hs_ed25519_public_key: %[4]s
+`, masterSecName, sourceNS,
+			base64.StdEncoding.EncodeToString(kp.SecretKeyFile()),
+			base64.StdEncoding.EncodeToString(kp.PublicKeyFile())))
+
+		By("applying a ReferenceGrant in sourceNS allowing OnionBalancePolicies in obpNS to read Secrets")
+		// The from.group matches the OBP API group used by MasterKeyReferenceGrantAllows.
+		applyYAML(fmt.Sprintf(`
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-ob-master-fetch
+  namespace: %[1]s
+spec:
+  from:
+  - group: policy.torgateway.io
+    kind: OnionBalancePolicy
+    namespace: %[2]s
+  to:
+  - group: ""
+    kind: Secret
+    name: %[3]s
+`, sourceNS, obpNS, masterSecName))
+
+		By("installing a dedicated GatewayClass for the cross-NS test")
+		applyYAML(fmt.Sprintf(`
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: %s
+spec:
+  controllerName: torgateway.io/gateway-controller
+`, crossNSGWClass))
+
+		By("deploying Gateway + OBP referencing the cross-NS master Secret")
+		applyYAML(fmt.Sprintf(`
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+spec:
+  gatewayClassName: %[3]s
+  listeners:
+  - { name: onion, port: 80, protocol: torgateway.io/HiddenService }
+---
+apiVersion: policy.torgateway.io/v1alpha1
+kind: OnionBalancePolicy
+metadata:
+  name: %[1]s-obp
+  namespace: %[2]s
+spec:
+  targetRefs:
+  - { group: gateway.networking.k8s.io, kind: Gateway, name: %[1]s }
+  replicas: 1
+  masterKeySecretRef:
+    name: %[4]s
+    namespace: %[5]s
+`, crossGWName, obpNS, crossNSGWClass, masterSecName, sourceNS))
+
+		By("waiting for Gateway.status.addresses to publish the expected .onion hostname")
+		Eventually(func() string {
+			out, _ := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "gateway", crossGWName,
+				"-o", "jsonpath={.status.addresses[0].value}"))
+			return strings.TrimSpace(out)
+		}, 5*time.Minute, 5*time.Second).Should(Equal(crossHostname),
+			"Gateway %s should publish the pre-seeded cross-NS master .onion address", crossGWName)
+
+		// CrossNSMasterRoleName(gw) = FrontendName(gw) + "-master-fetch"
+		//                           = gw.Name + "-frontend-master-fetch"
+		expectedRoleBindingName := crossGWName + "-frontend-master-fetch"
+		By("confirming the cross-NS RoleBinding lands in sourceNS")
+		out, rbErr := utils.Run(exec.Command("kubectl", "-n", sourceNS, "get", "rolebinding", expectedRoleBindingName))
+		Expect(rbErr).NotTo(HaveOccurred(), "cross-NS RoleBinding %s should exist in %s: %s",
+			expectedRoleBindingName, sourceNS, out)
+	})
 })
