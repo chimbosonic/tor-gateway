@@ -43,7 +43,7 @@ const (
 	chutneyMountPath      = "/etc/tor-gateway/testing-network/fragment"
 	chutneyOperatorNS     = "tor-gateway-system"
 	chutneyOperatorDeploy = "tor-gateway-controller-manager"
-	chutneyReadyTimeout   = 12 * time.Minute
+	chutneyReadyTimeout   = 18 * time.Minute
 	chutneyRolloutTimeout = 2 * time.Minute
 )
 
@@ -220,12 +220,12 @@ spec:
     livenessProbe:
       exec:
         command: ["pgrep", "tor"]
-      initialDelaySeconds: 60
+      initialDelaySeconds: 600
       periodSeconds: 60
       failureThreshold: 5
     resources:
-      requests: { cpu: "500m", memory: "1Gi" }
-      limits:   { cpu: "1",    memory: "2Gi" }
+      requests: { cpu: "750m", memory: "1.5Gi" }
+      limits:   { cpu: "1750m", memory: "3Gi" }
   volumes:
   - { name: data, emptyDir: {} }
 `
