@@ -258,15 +258,12 @@ var _ = Describe("OnionBalance HA — happy path", Ordered, Label("onionbalance"
 	}
 
 	It("routes by path to the correct backend over the master .onion", func() {
-		By("fetching / over Tor via onionbalance -> backend-A (waits for HS descriptor propagation)")
-		// In testing mode the operator passes --is-testnet to onionbalance,
-		// which drops its descriptor cycle to 20s fetch / 10s publish-check.
-		// 5m matches the single-pod tests' first-fetch budget.
-		Eventually(fetchOverTor("ha-tor-client", "/"), "5m", "5s").
+		By("fetching / over Tor via onionbalance -> backend-A (circuit is warm from BeforeAll warmup)")
+		Eventually(fetchOverTor("ha-tor-client", "/"), "1m", "3s").
 			Should(Equal("backend-A"), "/ should route to backend-A via the master .onion")
 
 		By("fetching /api over Tor via onionbalance -> backend-B")
-		Eventually(fetchOverTor("ha-tor-client", "/api"), "2m", "5s").
+		Eventually(fetchOverTor("ha-tor-client", "/api"), "1m", "3s").
 			Should(Equal("backend-B"), "/api should route to backend-B via the master .onion")
 	})
 
@@ -356,9 +353,9 @@ var _ = Describe("OnionBalance HA — mutations", Ordered, Label("onionbalance",
 
 		By("verifying the master .onion still serves / after pod kill")
 		// Pod kill -> StatefulSet restarts pod -> onionbalance descriptor refresh ->
-		// HSDir re-publish -> client re-lookup. Chutney testnet typically resolves
-		// within 2 min; 3m provides headroom for cold CI runners.
-		Eventually(fetchOverTor("ha-gw-mut-tor-client", "/"), "3m", "5s").
+		// HSDir re-publish -> client re-lookup. Circuit is warm from BeforeAll warmup;
+		// 2m covers recovery on chutney testnet with headroom for cold CI runners.
+		Eventually(fetchOverTor("ha-gw-mut-tor-client", "/"), "2m", "3s").
 			Should(Equal("backend-A"), "service should remain up after one pod kill")
 	})
 
