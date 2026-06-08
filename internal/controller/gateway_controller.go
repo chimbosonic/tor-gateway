@@ -999,9 +999,20 @@ func (r *GatewayReconciler) cleanupModeAResources(ctx context.Context, gw *gwv1.
 	for _, obj := range []client.Object{
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: DeploymentName(gw.Name)}},
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: ServiceName(gw.Name)}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: KeySecretName(gw.Name)}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: TorrcConfigMapName(gw.Name)}},
+		&netv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: NetworkPolicyName(gw.Name)}},
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: RouterRBACName(gw.Name)}},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: RouterRBACName(gw.Name)}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: RouterRBACName(gw.Name)}},
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: VanityRBACName(gw.Name)}},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: VanityRBACName(gw.Name)}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: VanityRBACName(gw.Name)}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: VanityOutSecretName(gw.Name)}},
+		&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: VanityRBACName(gw.Name)}},
 	} {
 		if err := client.IgnoreNotFound(r.Delete(ctx, obj)); err != nil {
-			return err
+			return fmt.Errorf("cleanupModeAResources: %T: %w", obj, err)
 		}
 	}
 	return nil
