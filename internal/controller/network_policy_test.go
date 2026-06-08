@@ -142,11 +142,31 @@ func TestBuildNetworkPolicy_TestingNetworkEgress(t *testing.T) {
 	if got := findEgressByNSLabel(np, "tor-gateway-chutney"); got == nil {
 		t.Fatalf("missing chutney-namespace egress rule; rules=%+v", np.Spec.Egress)
 	}
-	// The public-internet rule must still carry Except — cluster-pod
-	// isolation stays intact for everything outside the chutney ns.
-	pub := lastEgress(np)
-	if pub.To[0].IPBlock == nil || !slicesEqual(pub.To[0].IPBlock.Except, cidrs) {
-		t.Errorf("public-internet rule lost Except: got %+v", pub)
+	// In testing mode the public-internet egress rule must be absent —
+	// the Tor pods should reach only chutney (the private Tor network).
+	for _, r := range np.Spec.Egress {
+		for _, peer := range r.To {
+			if peer.IPBlock != nil {
+				t.Errorf("public-internet egress must be absent in testing mode; got rule %+v", r)
+			}
+		}
+	}
+}
+
+// TestBuildNetworkPolicy_TestingMode_PublicEgressAbsent verifies that when
+// testing mode is active the public-internet IPBlock rule is not emitted,
+// regardless of clusterPodCIDRs.
+func TestBuildNetworkPolicy_TestingMode_PublicEgressAbsent(t *testing.T) {
+	np, err := BuildNetworkPolicy(gwForNPTest(), nil, nil, "tor-gateway-chutney", testScheme(t))
+	if err != nil {
+		t.Fatalf("BuildNetworkPolicy: %v", err)
+	}
+	for _, r := range np.Spec.Egress {
+		for _, peer := range r.To {
+			if peer.IPBlock != nil {
+				t.Errorf("public-internet egress must be absent in testing mode; got rule %+v", r)
+			}
+		}
 	}
 }
 

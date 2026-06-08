@@ -190,17 +190,9 @@ func (r *GatewayReconciler) reconcileModeA(ctx context.Context, logger interface
 
 	// List HTTPRoutes targeting this Gateway for the NetworkPolicy egress
 	// whitelist (same query used for attachedRoutes status).
-	var routes []gwv1.HTTPRoute
-	{
-		routeList := &gwv1.HTTPRouteList{}
-		if err := r.List(ctx, routeList); err != nil {
-			return ctrl.Result{}, err
-		}
-		for i := range routeList.Items {
-			if routeTargetsGateway(&routeList.Items[i], gw) {
-				routes = append(routes, routeList.Items[i])
-			}
-		}
+	routes, err := r.routesForGateway(ctx, gw)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 	if err := r.ensureNetworkPolicy(ctx, gw, routes); err != nil {
 		logger.Error(err, "ensureNetworkPolicy failed")
@@ -635,36 +627,8 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 		}
 	}
 
-	svc, err := BuildBackendHeadlessService(gw, r.Scheme)
-	if err != nil {
+	if err := r.ensureModeBNetworkResources(ctx, gw, pol); err != nil {
 		return err
-	}
-	if err := r.ensureHAService(ctx, svc); err != nil {
-		return fmt.Errorf("backend headless Service: %w", err)
-	}
-
-	sa, err := BuildFrontendServiceAccount(gw, r.Scheme)
-	if err != nil {
-		return err
-	}
-	if err := r.ensureHAServiceAccount(ctx, sa); err != nil {
-		return fmt.Errorf("frontend ServiceAccount: %w", err)
-	}
-
-	role, err := BuildFrontendRole(gw, pol, r.Scheme)
-	if err != nil {
-		return err
-	}
-	if err := r.ensureHARole(ctx, role); err != nil {
-		return fmt.Errorf("frontend Role: %w", err)
-	}
-
-	rb, err := BuildFrontendRoleBinding(gw, r.Scheme)
-	if err != nil {
-		return err
-	}
-	if err := r.ensureHARoleBinding(ctx, rb); err != nil {
-		return fmt.Errorf("frontend RoleBinding: %w", err)
 	}
 
 	frontendTorrc, err := BuildFrontendTorrcConfigMap(gw, r.TestingNetworkInclude, r.Scheme)
@@ -722,23 +686,53 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 	// NetworkPolicy guards backend StatefulSet pods too. Resolve any
 	// HTTPRoutes attached to this Gateway so backend-egress rules are
 	// included (e.g. application Services behind onionbalance).
-	var modeBRoutes []gwv1.HTTPRoute
-	{
-		routeList := &gwv1.HTTPRouteList{}
-		if err := r.List(ctx, routeList); err != nil {
-			return fmt.Errorf("list HTTPRoutes: %w", err)
-		}
-		for i := range routeList.Items {
-			if routeTargetsGateway(&routeList.Items[i], gw) {
-				modeBRoutes = append(modeBRoutes, routeList.Items[i])
-			}
-		}
+	modeBRoutes, err := r.routesForGateway(ctx, gw)
+	if err != nil {
+		return fmt.Errorf("list HTTPRoutes for NetworkPolicy: %w", err)
 	}
 	if err := r.ensureNetworkPolicy(ctx, gw, modeBRoutes); err != nil {
 		return fmt.Errorf("NetworkPolicy: %w", err)
 	}
 
 	return r.updateStatusModeB(ctx, gw, master, pol)
+}
+
+// ensureModeBNetworkResources creates/updates the backend headless Service and
+// the frontend ServiceAccount, Role, and RoleBinding for Mode B. Extracted to
+// keep ensureModeB's cyclomatic complexity in check.
+func (r *GatewayReconciler) ensureModeBNetworkResources(ctx context.Context, gw *gwv1.Gateway, pol *policyv1alpha1.OnionBalancePolicy) error {
+	svc, err := BuildBackendHeadlessService(gw, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHAService(ctx, svc); err != nil {
+		return fmt.Errorf("backend headless Service: %w", err)
+	}
+
+	sa, err := BuildFrontendServiceAccount(gw, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHAServiceAccount(ctx, sa); err != nil {
+		return fmt.Errorf("frontend ServiceAccount: %w", err)
+	}
+
+	role, err := BuildFrontendRole(gw, pol, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHARole(ctx, role); err != nil {
+		return fmt.Errorf("frontend Role: %w", err)
+	}
+
+	rb, err := BuildFrontendRoleBinding(gw, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHARoleBinding(ctx, rb); err != nil {
+		return fmt.Errorf("frontend RoleBinding: %w", err)
+	}
+	return nil
 }
 
 // ensureCrossNSMasterRBAC handles the cross-namespace Role/RoleBinding that lets the
@@ -1205,6 +1199,21 @@ func routeTargetsGateway(route *gwv1.HTTPRoute, gw *gwv1.Gateway) bool {
 		}
 	}
 	return false
+}
+
+// routesForGateway lists all HTTPRoutes that target gw via parentRefs.
+func (r *GatewayReconciler) routesForGateway(ctx context.Context, gw *gwv1.Gateway) ([]gwv1.HTTPRoute, error) {
+	routeList := &gwv1.HTTPRouteList{}
+	if err := r.List(ctx, routeList); err != nil {
+		return nil, err
+	}
+	var out []gwv1.HTTPRoute
+	for i := range routeList.Items {
+		if routeTargetsGateway(&routeList.Items[i], gw) {
+			out = append(out, routeList.Items[i])
+		}
+	}
+	return out, nil
 }
 
 func (r *GatewayReconciler) updateStatus(ctx context.Context, gw *gwv1.Gateway, kp *tor.KeyPair) error {

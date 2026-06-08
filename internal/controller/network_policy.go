@@ -66,9 +66,13 @@ func BuildNetworkPolicy(
 		egress = append(egress, backendEgress(b))
 	}
 	if testingNetworkNamespace != "" {
+		// Testing mode: reach only the chutney pod (directory authorities +
+		// OR relays). Public internet egress is intentionally omitted —
+		// chutney IS the Tor network in this mode.
 		egress = append(egress, testingNetworkEgress(testingNetworkNamespace))
+	} else {
+		egress = append(egress, publicInternetEgress(clusterPodCIDRs))
 	}
-	egress = append(egress, publicInternetEgress(clusterPodCIDRs))
 
 	np := &netv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
