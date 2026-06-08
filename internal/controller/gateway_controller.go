@@ -718,6 +718,13 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 		return fmt.Errorf("frontend Deployment: %w", err)
 	}
 
+	// Mode B pods use the same label selector as Mode A, so the shared
+	// NetworkPolicy guards backend StatefulSet pods too.  Pass nil routes:
+	// Mode B has no HTTPRoutes; only the standard tor-network egress is needed.
+	if err := r.ensureNetworkPolicy(ctx, gw, nil); err != nil {
+		return fmt.Errorf("NetworkPolicy: %w", err)
+	}
+
 	return r.updateStatusModeB(ctx, gw, master, pol)
 }
 

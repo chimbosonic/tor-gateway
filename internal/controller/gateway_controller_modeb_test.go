@@ -19,6 +19,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	netv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -727,5 +728,52 @@ func TestUpdateStatusModeB_RetriesOnConflict(t *testing.T) {
 	programmedCond := meta.FindStatusCondition(got.Status.Conditions, string(gwv1.GatewayConditionProgrammed))
 	if programmedCond == nil || programmedCond.Status != metav1.ConditionTrue {
 		t.Errorf("Programmed condition = %v, want True", programmedCond)
+	}
+}
+
+// TestEnsureModeB_ReconcilesNetworkPolicy verifies that ensureModeB creates a
+// NetworkPolicy for the Gateway when TorPodNetworkPolicyEnabled is true.
+func TestEnsureModeB_ReconcilesNetworkPolicy(t *testing.T) {
+	ctx := context.Background()
+	gw := sampleGateway()
+	obp := samplePolicy(2)
+	masterSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "master-keys", Namespace: gw.Namespace},
+		Data:       validMasterSecretData(t),
+	}
+	sc := testScheme(t)
+	cl := fake.NewClientBuilder().WithScheme(sc).WithStatusSubresource(gw).WithObjects(gw, obp, masterSecret).Build()
+	r := &GatewayReconciler{Client: cl, Scheme: sc, Images: sampleImages(), TorPodNetworkPolicyEnabled: true}
+	if err := r.ensureModeB(ctx, gw, obp); err != nil {
+		t.Fatalf("ensureModeB: %v", err)
+	}
+	var np netv1.NetworkPolicy
+	if err := cl.Get(ctx, types.NamespacedName{Namespace: gw.Namespace, Name: NetworkPolicyName(gw.Name)}, &np); err != nil {
+		t.Fatalf("NetworkPolicy not created: %v", err)
+	}
+}
+
+// TestEnsureModeB_NoNetworkPolicyWhenDisabled verifies that ensureModeB does
+// NOT create a NetworkPolicy when TorPodNetworkPolicyEnabled is false.
+func TestEnsureModeB_NoNetworkPolicyWhenDisabled(t *testing.T) {
+	ctx := context.Background()
+	gw := sampleGateway()
+	obp := samplePolicy(2)
+	masterSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "master-keys", Namespace: gw.Namespace},
+		Data:       validMasterSecretData(t),
+	}
+	sc := testScheme(t)
+	cl := fake.NewClientBuilder().WithScheme(sc).WithStatusSubresource(gw).WithObjects(gw, obp, masterSecret).Build()
+	r := &GatewayReconciler{Client: cl, Scheme: sc, Images: sampleImages(), TorPodNetworkPolicyEnabled: false}
+	if err := r.ensureModeB(ctx, gw, obp); err != nil {
+		t.Fatalf("ensureModeB: %v", err)
+	}
+	err := cl.Get(ctx, types.NamespacedName{Namespace: gw.Namespace, Name: NetworkPolicyName(gw.Name)}, &netv1.NetworkPolicy{})
+	if err == nil {
+		t.Fatal("NetworkPolicy should not exist when TorPodNetworkPolicyEnabled=false")
+	}
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("unexpected error checking for NetworkPolicy: %v", err)
 	}
 }
