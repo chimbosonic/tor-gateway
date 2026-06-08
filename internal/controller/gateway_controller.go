@@ -962,10 +962,10 @@ func previousOnion(gw *gwv1.Gateway) string {
 func (r *GatewayReconciler) gcBackendSecretsIfSettled(ctx context.Context, gw *gwv1.Gateway, ss *appsv1.StatefulSet, replicas int32) error {
 	var current appsv1.StatefulSet
 	if err := r.Get(ctx, client.ObjectKeyFromObject(ss), &current); err != nil {
-		return nil // not found yet — nothing to GC
+		return client.IgnoreNotFound(err)
 	}
 	if current.Spec.Replicas == nil || current.Status.Replicas != *current.Spec.Replicas {
-		return nil // pods still terminating — requeue via StatefulSet Watch
+		return nil // pods still starting or terminating — requeue via StatefulSet Watch
 	}
 	return r.gcOrphanBackendSecrets(ctx, gw, replicas)
 }
