@@ -132,16 +132,40 @@ func publicInternetEgress(clusterPodCIDRs []string) netv1.NetworkPolicyEgressRul
 	}
 }
 
-// testingNetworkEgress allows all pods in the chutney namespace. Egress to
-// the chutney directory authorities is required for Tor to bootstrap in
-// e2e; production never enables this.
+// chutneyPodLabel is the label carried by the chutney Pod in every e2e
+// cluster (see chutneyManifest in test/e2e/chutney_test.go).
+const chutneyPodLabel = "chutney"
+
+// Chutney k8s-mini port ranges used by the three directory authorities.
+// OR ports: 5000-5002 (circuit-building)
+// DirAuth ports: 7000-7002 (consensus / directory fetch)
+const (
+	chutneyORPortFirst  = int32(5000)
+	chutneyORPortLast   = int32(5002)
+	chutneyDirPortFirst = int32(7000)
+	chutneyDirPortLast  = int32(7002)
+)
+
+// testingNetworkEgress restricts egress to the chutney pod (by PodSelector)
+// on the known OR and DirAuth port ranges. Production never enables this.
 func testingNetworkEgress(namespace string) netv1.NetworkPolicyEgressRule {
+	tcp := corev1.ProtocolTCP
+	orFirst := intstr.FromInt(int(chutneyORPortFirst))
+	dirFirst := intstr.FromInt(int(chutneyDirPortFirst))
+	orLast, dirLast := chutneyORPortLast, chutneyDirPortLast
 	return netv1.NetworkPolicyEgressRule{
 		To: []netv1.NetworkPolicyPeer{{
 			NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
 				"kubernetes.io/metadata.name": namespace,
 			}},
+			PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
+				"app": chutneyPodLabel,
+			}},
 		}},
+		Ports: []netv1.NetworkPolicyPort{
+			{Protocol: &tcp, Port: &orFirst, EndPort: &orLast},
+			{Protocol: &tcp, Port: &dirFirst, EndPort: &dirLast},
+		},
 	}
 }
 

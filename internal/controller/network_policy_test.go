@@ -148,6 +148,41 @@ func TestBuildNetworkPolicy_TestingNetworkEgress(t *testing.T) {
 	}
 }
 
+// TestTestingModeEgress_IsScopedToChutneyPodsAndPorts verifies the
+// testing-mode egress rule targets only chutney pods (by PodSelector) and
+// the known chutney port ranges (OR: 5000-5002, DirAuth: 7000-7002), not an
+// unrestricted namespace-wide allow.
+func TestTestingModeEgress_IsScopedToChutneyPodsAndPorts(t *testing.T) {
+	np, err := BuildNetworkPolicy(gwForNPTest(), nil, nil, "tor-gateway-chutney", testScheme(t))
+	if err != nil {
+		t.Fatalf("BuildNetworkPolicy: %v", err)
+	}
+	var sawChutney bool
+	for i := range np.Spec.Egress {
+		e := &np.Spec.Egress[i]
+		for _, peer := range e.To {
+			if peer.NamespaceSelector == nil {
+				continue
+			}
+			if peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "tor-gateway-chutney" {
+				continue
+			}
+			sawChutney = true
+			if peer.PodSelector == nil || len(peer.PodSelector.MatchLabels) == 0 {
+				t.Error("chutney egress peer must restrict by PodSelector, not bare namespace")
+			} else if peer.PodSelector.MatchLabels["app"] != "chutney" {
+				t.Errorf("chutney PodSelector must have app=chutney; got %v", peer.PodSelector.MatchLabels)
+			}
+			if len(e.Ports) == 0 {
+				t.Error("chutney egress must enumerate ports")
+			}
+		}
+	}
+	if !sawChutney {
+		t.Fatal("expected a chutney egress rule")
+	}
+}
+
 func TestBuildNetworkPolicy_TestingNetworkOmittedByDefault(t *testing.T) {
 	np, err := BuildNetworkPolicy(gwForNPTest(), nil, nil, "", testScheme(t))
 	if err != nil {
