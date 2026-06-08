@@ -135,7 +135,8 @@ test-e2e-suite: setup-test-e2e manifests generate fmt vet ## Run a label-filtere
 	@echo "Running e2e suite with label-filter=$$E2E_LABEL_FILTER"
 	TOR_GATEWAY_E2E_MODE=chutney KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) CERT_MANAGER_INSTALL_SKIP=true \
 		go test -tags=e2e -timeout 30m ./test/e2e/ -v -ginkgo.v \
-		-ginkgo.label-filter="$$E2E_LABEL_FILTER"
+		-ginkgo.label-filter="$$E2E_LABEL_FILTER" \
+		-ginkgo.json-report=ginkgo-report.json
 	$(MAKE) cleanup-test-e2e
 
 .PHONY: test-e2e-realtor

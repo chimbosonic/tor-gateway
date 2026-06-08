@@ -55,6 +55,28 @@ jobs:
           go mod tidy
           make test-e2e-suite
 
+      - name: Step summary
+        if: always()
+        run: |
+          set +e
+          if [ ! -f ginkgo-report.json ]; then
+            echo "## e2e (${{ matrix.suite }}): report not generated" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## e2e (${{ matrix.suite }}) summary"
+            echo ""
+            echo "| Spec | State | Duration |"
+            echo "|---|---|---|"
+            jq -r '.[0].SpecReports[]? |
+              select(.LeafNodeType == "It") |
+              [
+                ((.ContainerHierarchyTexts // []) | join(" > ")) + " > " + .LeafNodeText,
+                .State,
+                ((.RunTime // 0) / 1000000000 | floor | tostring) + "s"
+              ] | "| " + (.[0]) + " | " + (.[1]) + " | " + (.[2]) + " |"' ginkgo-report.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Collect diagnostics
         if: failure()
         run: |
