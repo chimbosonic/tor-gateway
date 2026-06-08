@@ -54,3 +54,39 @@ jobs:
         run: |
           go mod tidy
           make test-e2e-suite
+
+      - name: Collect diagnostics
+        if: failure()
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/e2e-diagnostics"
+          # Controller manager logs (current + previous instance if any).
+          kubectl logs -n tor-gateway-system deployment/tor-gateway-controller-manager \
+            > "$RUNNER_TEMP/e2e-diagnostics/controller-current.log" 2>&1
+          kubectl logs -n tor-gateway-system deployment/tor-gateway-controller-manager --previous \
+            > "$RUNNER_TEMP/e2e-diagnostics/controller-previous.log" 2>&1 || true
+          # Chutney pod logs.
+          kubectl logs -n tor-gateway-chutney pod/chutney-0 \
+            > "$RUNNER_TEMP/e2e-diagnostics/chutney.log" 2>&1 || true
+          # Describe + events for every namespace touched by the suite.
+          for ns in tor-gateway-system tor-gateway-chutney tor-gateway-ha tor-gateway-ha-mut tor-gateway-ha-crossns ha-master-secrets; do
+            kubectl describe pods -n "$ns" \
+              > "$RUNNER_TEMP/e2e-diagnostics/describe-pods-$ns.txt" 2>&1 || true
+            kubectl get events -n "$ns" --sort-by='.lastTimestamp' \
+              > "$RUNNER_TEMP/e2e-diagnostics/events-$ns.txt" 2>&1 || true
+          done
+          # All-pods snapshot.
+          kubectl get pods -A -o wide \
+            > "$RUNNER_TEMP/e2e-diagnostics/all-pods.txt" 2>&1 || true
+          # Ginkgo report (Task 6 emits this; ignore failure if absent).
+          cp ginkgo-report.json "$RUNNER_TEMP/e2e-diagnostics/ginkgo-report.json" 2>/dev/null || true
+          ls -la "$RUNNER_TEMP/e2e-diagnostics/"
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-${{ matrix.suite }}-diagnostics
+          path: ${{ runner.temp }}/e2e-diagnostics/
+          retention-days: 7
+          if-no-files-found: ignore
