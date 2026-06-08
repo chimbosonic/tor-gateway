@@ -67,6 +67,7 @@ var _ = BeforeSuite(func() {
 	configureKubectlKubeRC()
 	setupCertManager()
 	deployOperator()
+	setupHAImages()
 
 	By("deploying chutney unless TOR_GATEWAY_E2E_MODE=realtor")
 	if os.Getenv("TOR_GATEWAY_E2E_MODE") != "realtor" {
@@ -130,6 +131,40 @@ func deployOperator() {
 		return strings.TrimSpace(string(out))
 	}, 2*time.Minute, 3*time.Second).Should(Equal("True"),
 		"operator deployment never became Available")
+}
+
+// setupHAImages builds and loads all Mode B (HA / OnionBalance) images once for
+// the whole suite, then patches the manager Deployment with the --onionbalance-image
+// and --obrefresh-image flags so Mode B specs can use them. Mode A specs ignore
+// these flags. Called from BeforeSuite after deployOperator so the Deployment
+// already exists and can accept the patch.
+func setupHAImages() {
+	const (
+		obrefreshImage = "ghcr.io/chimbosonic/tor-gateway-obrefresh:dev"
+		obImage        = "ghcr.io/chimbosonic/tor-gateway-onionbalance:dev"
+	)
+
+	By("building and loading HA-specific images")
+	buildAndLoadImage("image-router", "ghcr.io/chimbosonic/tor-gateway-router:dev")
+	buildAndLoadImage("image-tor-init", "ghcr.io/chimbosonic/tor-gateway-tor-init:dev")
+	buildAndLoadImage("image-tor", "ghcr.io/chimbosonic/tor:0.4.9")
+	buildAndLoadImage("image-obrefresh", obrefreshImage)
+	buildAndLoadImage("image-onionbalance", obImage)
+
+	By("patching the manager to enable the onionbalance and obrefresh images")
+	_, err := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-system", "patch", "deployment",
+		"tor-gateway-controller-manager", "--type=json",
+		"-p", fmt.Sprintf(`[
+			{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--onionbalance-image=%s"},
+			{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--obrefresh-image=%s"}
+		]`, obImage, obrefreshImage)))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "patch manager with HA image flags")
+
+	By("waiting for the manager rollout after HA image patch")
+	Eventually(func() (string, error) {
+		return utils.Run(exec.Command("kubectl", "-n", "tor-gateway-system",
+			"rollout", "status", "deployment/tor-gateway-controller-manager", "--timeout=30s"))
+	}, "2m", "5s").Should(ContainSubstring("successfully rolled out"))
 }
 
 // teardownOperator removes everything deployOperator created. Best-effort:

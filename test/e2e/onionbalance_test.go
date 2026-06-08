@@ -58,39 +58,12 @@ const obpNS = "tor-gateway-ha"
 // waits for Gateway.status.addresses to publish the .onion, applies a tor-client
 // pod, and returns the master .onion address for use in specs.
 func modeBFixture(ns, gwClass, gwName string) (masterOnion string) {
-	const (
-		obrefreshImage = "ghcr.io/chimbosonic/tor-gateway-obrefresh:dev"
-		obImage        = "ghcr.io/chimbosonic/tor-gateway-onionbalance:dev"
-	)
-
 	masterSecretName := gwName + "-master-secret"
 	obpName := gwName + "-obp"
 	routeName := gwName + "-route"
 	backendA := gwName + "-backend-a"
 	backendB := gwName + "-backend-b"
 	torClientPod := gwName + "-tor-client"
-
-	By("building and loading HA-specific images")
-	buildAndLoadImage("image-router", "ghcr.io/chimbosonic/tor-gateway-router:dev")
-	buildAndLoadImage("image-tor-init", "ghcr.io/chimbosonic/tor-gateway-tor-init:dev")
-	buildAndLoadImage("image-tor", "ghcr.io/chimbosonic/tor:0.4.9")
-	buildAndLoadImage("image-obrefresh", obrefreshImage)
-	buildAndLoadImage("image-onionbalance", obImage)
-
-	By("patching the manager to enable the onionbalance and obrefresh images")
-	_, err := utils.Run(exec.Command("kubectl", "-n", "tor-gateway-system", "patch", "deployment",
-		"tor-gateway-controller-manager", "--type=json",
-		"-p", fmt.Sprintf(`[
-			{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--onionbalance-image=%s"},
-			{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--obrefresh-image=%s"}
-		]`, obImage, obrefreshImage)))
-	Expect(err).NotTo(HaveOccurred(), "patch manager with HA image flags")
-
-	By("waiting for the manager rollout after patch")
-	Eventually(func() (string, error) {
-		return utils.Run(exec.Command("kubectl", "-n", "tor-gateway-system",
-			"rollout", "status", "deployment/tor-gateway-controller-manager", "--timeout=30s"))
-	}, "2m", "5s").Should(ContainSubstring("successfully rolled out"))
 
 	By("creating the HA test namespace")
 	runOrSkipExisting("kubectl", "create", "ns", ns)
