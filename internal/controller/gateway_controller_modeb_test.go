@@ -462,31 +462,6 @@ func makeAcceptedFor(gw *gwv1.Gateway) policyv1alpha1.OnionBalancePolicyStatus {
 	}
 }
 
-// makeAcceptedForOnly returns a status with Accepted=True for gwA only;
-// gateways not listed here will have no ancestor entry and therefore see
-// Accepted=false.
-func makeAcceptedForOnly(gwA *gwv1.Gateway) policyv1alpha1.OnionBalancePolicyStatus {
-	ns := gwv1.Namespace(gwA.Namespace)
-	kind := gwv1.Kind(GatewayKind)
-	group := gwv1.Group(GatewayAPIGroup)
-	return policyv1alpha1.OnionBalancePolicyStatus{
-		Ancestors: []gwv1.PolicyAncestorStatus{{
-			AncestorRef: gwv1.ParentReference{
-				Group:     &group,
-				Kind:      &kind,
-				Name:      gwv1.ObjectName(gwA.Name),
-				Namespace: &ns,
-			},
-			ControllerName: ControllerName,
-			Conditions: []metav1.Condition{{
-				Type:   string(gwv1.PolicyConditionAccepted),
-				Status: metav1.ConditionTrue,
-				Reason: ReasonOBPAccepted,
-			}},
-		}},
-	}
-}
-
 // --- findEffectiveOnionBalance tests ---
 
 func TestFindEffectiveOnionBalance_LexicalTiebreak(t *testing.T) {
@@ -510,7 +485,7 @@ func TestFindEffectiveOnionBalance_PerAncestorAccepted(t *testing.T) {
 	gwA := sampleGatewayName("gw-a")
 	gwB := sampleGatewayName("gw-b")
 	obp := obpTargetingMany("obp", "gw-a", "gw-b")
-	obp.Status = makeAcceptedForOnly(gwA) // gw-b NOT accepted
+	obp.Status = makeAcceptedFor(gwA) // gw-b NOT accepted
 	cl := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(gwA, gwB, obp).Build()
 	r := &GatewayReconciler{Client: cl, Scheme: testScheme(t)}
 	_, accepted, _ := r.findEffectiveOnionBalance(context.Background(), gwB)
