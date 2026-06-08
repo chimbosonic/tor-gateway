@@ -24,6 +24,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -32,6 +33,10 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/chimbosonic/tor-gateway/internal/tor"
 	"github.com/chimbosonic/tor-gateway/test/utils"
@@ -490,4 +495,50 @@ spec:
 		Expect(rbErr).NotTo(HaveOccurred(), "cross-NS RoleBinding %s should exist in %s: %s",
 			expectedRoleBindingName, sourceNS, out)
 	})
+
+	// Task 13: per-Gateway NetworkPolicy selector covers all Mode B pods.
+	It("covers Mode B frontend and backend pods with the per-Gateway NetworkPolicy",
+		Label("networkpolicy", "onionbalance"), func() {
+			const npName = "ha-gw-netpol"
+
+			By("fetching the per-Gateway NetworkPolicy")
+			npOut, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "networkpolicy", npName, "-o", "json"))
+			Expect(err).NotTo(HaveOccurred(), "NetworkPolicy %s should exist in %s", npName, obpNS)
+			var np networkingv1.NetworkPolicy
+			Expect(json.Unmarshal([]byte(npOut), &np)).To(Succeed())
+
+			sel, selErr := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
+			Expect(selErr).NotTo(HaveOccurred())
+
+			By("listing all Mode B pods (frontend Deployment + backend StatefulSet)")
+			podOut, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "pods",
+				"-l", "torgateway.io/gateway=ha-gw",
+				"-o", "jsonpath={range .items[*]}{.metadata.name}={.metadata.labels}{\"\\n\"}{end}"))
+			Expect(err).NotTo(HaveOccurred(), "list Mode B pods in %s", obpNS)
+
+			type podItem struct {
+				Metadata struct {
+					Name   string            `json:"name"`
+					Labels map[string]string `json:"labels"`
+				} `json:"metadata"`
+			}
+			type podList struct {
+				Items []podItem `json:"items"`
+			}
+			listOut, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "pods",
+				"-l", "torgateway.io/gateway=ha-gw",
+				"-o", "json"))
+			Expect(err).NotTo(HaveOccurred(), "get pods JSON in %s", obpNS)
+			_ = podOut
+
+			var pl podList
+			Expect(json.Unmarshal([]byte(listOut), &pl)).To(Succeed())
+			Expect(pl.Items).NotTo(BeEmpty(), "expected at least one Mode B pod with label torgateway.io/gateway=ha-gw")
+
+			By("asserting the NP podSelector matches every Mode B pod")
+			for _, p := range pl.Items {
+				Expect(sel.Matches(labels.Set(p.Metadata.Labels))).To(BeTrue(),
+					"NP selector should match Mode B pod %s with labels %v", p.Metadata.Name, p.Metadata.Labels)
+			}
+		})
 })
