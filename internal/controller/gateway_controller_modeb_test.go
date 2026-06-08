@@ -609,6 +609,60 @@ func (c *retryProbeClient) Status() client.SubResourceWriter {
 	return &retryProbeStatusWriter{inner: c.Client.Status(), parent: c}
 }
 
+// TestUpdateStatusModeB_PreservesExistingAddressesOfOtherTypes verifies that
+// updateStatusModeB keeps non-onion addresses already present in Status.Addresses
+// while still adding (or updating) the master .onion entry.
+func TestUpdateStatusModeB_PreservesExistingAddressesOfOtherTypes(t *testing.T) {
+	ctx := context.Background()
+	gw := sampleGateway()
+	hostnameType := gwv1.HostnameAddressType
+	gw.Status.Addresses = []gwv1.GatewayStatusAddress{
+		{Type: &hostnameType, Value: "external.example"},
+	}
+
+	kp, err := tor.GenerateKeyPair(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	master := kp.OnionAddress()
+
+	sc := testScheme(t)
+	inner := fake.NewClientBuilder().
+		WithScheme(sc).
+		WithStatusSubresource(gw).
+		WithObjects(gw).
+		Build()
+	// Prime the status subresource with the pre-existing address.
+	if err := inner.Status().Update(ctx, gw); err != nil {
+		t.Fatalf("pre-seed status: %v", err)
+	}
+	r := &GatewayReconciler{Client: inner, Scheme: sc, Images: sampleImages()}
+
+	if err := r.updateStatusModeB(ctx, gw, master, samplePolicy(2)); err != nil {
+		t.Fatalf("updateStatusModeB: %v", err)
+	}
+
+	var got gwv1.Gateway
+	if err := inner.Get(ctx, client.ObjectKeyFromObject(gw), &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	var sawHostname, sawOnion bool
+	for _, a := range got.Status.Addresses {
+		if a.Value == "external.example" {
+			sawHostname = true
+		}
+		if strings.HasSuffix(a.Value, ".onion") {
+			sawOnion = true
+		}
+	}
+	if !sawHostname {
+		t.Error("expected pre-existing hostname address to be preserved")
+	}
+	if !sawOnion {
+		t.Error("expected master .onion address to be added")
+	}
+}
+
 // TestUpdateStatusModeB_RetriesOnConflict verifies that updateStatusModeB uses
 // RetryOnConflict for both the annotation Update and the Status().Update calls.
 // The retryProbeClient returns a 409 on the first attempt of each; the test

@@ -981,7 +981,23 @@ func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gate
 			return err
 		}
 		addrType := gwv1.HostnameAddressType
-		fresh.Status.Addresses = []gwv1.GatewayStatusAddress{{Type: &addrType, Value: master.String()}}
+		masterAddr := gwv1.GatewayStatusAddress{Type: &addrType, Value: master.String()}
+		var merged []gwv1.GatewayStatusAddress
+		foundOnion := false
+		for _, a := range fresh.Status.Addresses {
+			if strings.HasSuffix(a.Value, ".onion") {
+				if !foundOnion {
+					merged = append(merged, masterAddr)
+					foundOnion = true
+				}
+				continue
+			}
+			merged = append(merged, a)
+		}
+		if !foundOnion {
+			merged = append(merged, masterAddr)
+		}
+		fresh.Status.Addresses = merged
 		wantConds := []metav1.Condition{
 			{
 				Type:               string(gwv1.GatewayConditionAccepted),
