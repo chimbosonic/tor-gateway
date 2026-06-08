@@ -257,7 +257,7 @@ spec:
 			Should(Equal("backend-B"), "/api should route to backend-B via the master .onion")
 	})
 
-	It("remains reachable after a backend pod is killed", func() {
+	It("remains reachable after a backend pod is killed", Label("onionbalance", "ob-failover"), func() {
 		By("deleting one backend StatefulSet pod")
 		out, _ := utils.Run(exec.Command("kubectl", "-n", obpNS,
 			"get", "pods", "-l", "torgateway.io/role=backend",
@@ -273,7 +273,7 @@ spec:
 			Should(Equal("backend-A"), "service should remain up after one pod kill")
 	})
 
-	It("remains reachable after scaling replicas from 3 to 1", func() {
+	It("remains reachable after scaling replicas from 3 to 1", Label("onionbalance", "ob-failover"), func() {
 		By("patching OnionBalancePolicy replicas: 3 → 1")
 		_, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "patch", "onionbalancepolicy", "ha-obp",
 			"--type=merge", "-p", `{"spec":{"replicas":1}}`))
@@ -349,7 +349,7 @@ spec:
 
 	// Task 11: SIGHUP reload on scale-up.
 	// Runs after Task 10 which restores replicas to 3; patches OBP to 4.
-	It("reloads onionbalance via SIGHUP when backends scale up", Label("onionbalance"), func() {
+	It("reloads onionbalance via SIGHUP when backends scale up", Label("onionbalance", "ob-failover"), func() {
 		By("patching OBP replicas: 3 → 4")
 		_, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "patch", "onionbalancepolicy", "ha-obp",
 			"--type=merge", "-p", `{"spec":{"replicas":4}}`))
@@ -386,7 +386,7 @@ spec:
 	})
 
 	// Task 12: Cross-NS master Secret via ReferenceGrant.
-	It("supports a master Secret in a different namespace via ReferenceGrant", Label("onionbalance", "crossns"), func() {
+	It("supports a master Secret in a different namespace via ReferenceGrant", Label("onionbalance", "ob-crossns"), func() {
 		const (
 			crossNSGWClass = "tor-gateway-ha-crossns"
 			crossGWName    = "blog-cross"
