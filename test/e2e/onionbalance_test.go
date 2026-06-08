@@ -212,6 +212,18 @@ spec:
 		"wait", "--for=condition=Ready", "pod/"+torClientPod, "--timeout=120s"))
 	Expect(err).NotTo(HaveOccurred(), "%s pod not ready", torClientPod)
 
+	By("warming up the Tor circuit to the master .onion (absorbs HSDir propagation latency)")
+	// This wait pulls the propagation cost out of every spec — once it succeeds,
+	// fetchOverTor calls inside specs can use tight budgets (30s-1m). A failure
+	// here is reported as a BeforeAll error, not a spec flake.
+	Eventually(func() string {
+		out, _ := utils.Run(exec.Command("kubectl", "-n", ns, "exec", torClientPod, "-c", "curl", "--",
+			"curl", "-s", "--max-time", "30", "--socks5-hostname", "127.0.0.1:9050",
+			"http://"+masterOnion+"/"))
+		return strings.TrimSpace(out)
+	}, "10m", "10s").Should(Or(Equal("backend-A"), Equal("backend-B")),
+		"warmup: tor-client should reach the master .onion within 10m")
+
 	return masterOnion
 }
 
