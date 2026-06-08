@@ -898,6 +898,7 @@ func (r *GatewayReconciler) ensureHADeployment(ctx context.Context, want *appsv1
 const (
 	annLastReplicas = "torgateway.io/last-known-replicas"
 	annPowEmitted   = "torgateway.io/pow-override-emitted"
+	annTrue         = "true"
 )
 
 func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gateway, master tor.OnionAddress, pol *policyv1alpha1.OnionBalancePolicy) error {
@@ -918,13 +919,13 @@ func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gate
 		gw.Annotations[annLastReplicas] = strconv.Itoa(int(pol.Spec.Replicas))
 		annotationsChanged = true
 	}
-	if powForcedOff(ctx, r.Client, gw) && gw.Annotations[annPowEmitted] != "true" {
+	if powForcedOff(ctx, r.Client, gw) && gw.Annotations[annPowEmitted] != annTrue {
 		r.event(gw, corev1.EventTypeNormal, "PoWForcedOffInHA",
 			"HiddenServicePoWDefensesEnabled in TorServicePolicy is overridden to false on backends (onionbalance#13)")
 		if gw.Annotations == nil {
 			gw.Annotations = map[string]string{}
 		}
-		gw.Annotations[annPowEmitted] = "true"
+		gw.Annotations[annPowEmitted] = annTrue
 		annotationsChanged = true
 	}
 
@@ -933,43 +934,62 @@ func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gate
 	// object — which wipes any status fields we may have already set on
 	// the in-memory gw. So we must set the status fields AFTER this call,
 	// not before.
+	//
+	// Each retry closure re-fetches the Gateway so that a real API server
+	// 409 (stale ResourceVersion) is resolved on retry rather than burning
+	// through all attempts with the same stale object.
 	if annotationsChanged {
 		if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-			return r.Update(ctx, gw)
+			var fresh gwv1.Gateway
+			if err := r.Get(ctx, client.ObjectKeyFromObject(gw), &fresh); err != nil {
+				return err
+			}
+			if fresh.Annotations == nil {
+				fresh.Annotations = map[string]string{}
+			}
+			fresh.Annotations[annLastReplicas] = strconv.Itoa(int(pol.Spec.Replicas))
+			if powForcedOff(ctx, r.Client, &fresh) {
+				fresh.Annotations[annPowEmitted] = annTrue
+			}
+			if err := r.Update(ctx, &fresh); err != nil {
+				return err
+			}
+			*gw = fresh
+			return nil
 		}); err != nil {
-			return err
-		}
-		// Re-fetch to get the updated ResourceVersion before the status write.
-		if err := r.Get(ctx, client.ObjectKeyFromObject(gw), gw); err != nil {
 			return err
 		}
 	}
 
-	addrType := gwv1.HostnameAddressType
-	gw.Status.Addresses = []gwv1.GatewayStatusAddress{{Type: &addrType, Value: master.String()}}
-	wantConds := []metav1.Condition{
-		{
-			Type:               string(gwv1.GatewayConditionAccepted),
-			Status:             metav1.ConditionTrue,
-			Reason:             string(gwv1.GatewayReasonAccepted),
-			Message:            "Gateway accepted by tor-gateway",
-			ObservedGeneration: gw.Generation,
-			LastTransitionTime: metav1.Now(),
-		},
-		{
-			Type:               string(gwv1.GatewayConditionProgrammed),
-			Status:             metav1.ConditionTrue,
-			Reason:             string(gwv1.GatewayReasonProgrammed),
-			Message:            "Mode B (onionbalance HA) provisioned; master .onion published",
-			ObservedGeneration: gw.Generation,
-			LastTransitionTime: metav1.Now(),
-		},
-	}
-	for _, c := range wantConds {
-		setCondition(&gw.Status.Conditions, c)
-	}
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		return r.Status().Update(ctx, gw)
+		var fresh gwv1.Gateway
+		if err := r.Get(ctx, client.ObjectKeyFromObject(gw), &fresh); err != nil {
+			return err
+		}
+		addrType := gwv1.HostnameAddressType
+		fresh.Status.Addresses = []gwv1.GatewayStatusAddress{{Type: &addrType, Value: master.String()}}
+		wantConds := []metav1.Condition{
+			{
+				Type:               string(gwv1.GatewayConditionAccepted),
+				Status:             metav1.ConditionTrue,
+				Reason:             string(gwv1.GatewayReasonAccepted),
+				Message:            "Gateway accepted by tor-gateway",
+				ObservedGeneration: fresh.Generation,
+				LastTransitionTime: metav1.Now(),
+			},
+			{
+				Type:               string(gwv1.GatewayConditionProgrammed),
+				Status:             metav1.ConditionTrue,
+				Reason:             string(gwv1.GatewayReasonProgrammed),
+				Message:            "Mode B (onionbalance HA) provisioned; master .onion published",
+				ObservedGeneration: fresh.Generation,
+				LastTransitionTime: metav1.Now(),
+			},
+		}
+		for _, c := range wantConds {
+			setCondition(&fresh.Status.Conditions, c)
+		}
+		return r.Status().Update(ctx, &fresh)
 	})
 }
 

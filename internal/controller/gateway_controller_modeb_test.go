@@ -649,16 +649,29 @@ func TestUpdateStatusModeB_RetriesOnConflict(t *testing.T) {
 		t.Errorf("Status().Update attempts = %d, want 2", probe.statusUpdateAttempts)
 	}
 
-	// Verify the status was actually persisted.
+	// Verify all mutations were actually persisted to the stored object.
+	// This confirms the re-fetched object inside the retry closures received
+	// the correct mutations before each Update call.
 	var got gwv1.Gateway
 	if err := inner.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &got); err != nil {
 		t.Fatalf("get gateway: %v", err)
 	}
+	// Annotation mutation: annLastReplicas must reflect the policy's replica count.
+	if got.Annotations[annLastReplicas] != "3" {
+		t.Errorf("annotation %s = %q, want %q", annLastReplicas, got.Annotations[annLastReplicas], "3")
+	}
+	// Status mutation: address must be the master onion.
 	if len(got.Status.Addresses) == 0 || got.Status.Addresses[0].Value != master.String() {
 		t.Errorf("status.addresses = %v, want [%s]", got.Status.Addresses, master.String())
 	}
+	// Status mutation: Accepted condition must be True.
 	acceptedCond := meta.FindStatusCondition(got.Status.Conditions, string(gwv1.GatewayConditionAccepted))
 	if acceptedCond == nil || acceptedCond.Status != metav1.ConditionTrue {
 		t.Errorf("Accepted condition = %v, want True", acceptedCond)
+	}
+	// Status mutation: Programmed condition must be True.
+	programmedCond := meta.FindStatusCondition(got.Status.Conditions, string(gwv1.GatewayConditionProgrammed))
+	if programmedCond == nil || programmedCond.Status != metav1.ConditionTrue {
+		t.Errorf("Programmed condition = %v, want True", programmedCond)
 	}
 }
