@@ -94,7 +94,10 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	if err := run(context.Background(), src, dst, clientAuthSrc, obMasterAddress, apiFetchSecret, apiFetchSecretPrefix); err != nil {
+	if err := run(
+		context.Background(), src, dst, clientAuthSrc,
+		obMasterAddress, apiFetchSecret, apiFetchSecretPrefix,
+	); err != nil {
 		slog.Error("tor-init failed", "err", err)
 		os.Exit(1)
 	}
@@ -103,53 +106,24 @@ func main() {
 		"ob_master", obMasterAddress != "")
 }
 
-func run(ctx context.Context, src, dst, clientAuthSrc, obMasterAddress, apiFetchSecret, apiFetchSecretPrefix string) error {
+func run(
+	ctx context.Context,
+	src, dst, clientAuthSrc, obMasterAddress, apiFetchSecret, apiFetchSecretPrefix string,
+) error {
 	if err := os.MkdirAll(dst, tor.HiddenServiceDirMode); err != nil {
 		return err
 	}
 
 	if apiFetchSecret != "" {
-		parts := strings.SplitN(apiFetchSecret, "/", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return fmt.Errorf("--api-fetch-secret expects NAMESPACE/NAME, got %q", apiFetchSecret)
+		if err := runAPIFetch(ctx, apiFetchSecret, dst); err != nil {
+			return err
 		}
-		cfg, err := rest.InClusterConfig()
-		if err != nil {
-			return fmt.Errorf("in-cluster config: %w", err)
-		}
-		cs, err := kubernetes.NewForConfig(cfg)
-		if err != nil {
-			return fmt.Errorf("kubernetes client: %w", err)
-		}
-		if err := fetchSecretToDir(ctx, cs, parts[0], parts[1], dst); err != nil {
-			return fmt.Errorf("api-fetch: %w", err)
-		}
-		slog.Info("tor-init: api-fetched secret", "ref", apiFetchSecret)
 	}
 
 	if apiFetchSecretPrefix != "" {
-		podName := os.Getenv("POD_NAME")
-		podNamespace := os.Getenv("POD_NAMESPACE")
-		if podName == "" || podNamespace == "" {
-			return fmt.Errorf("--api-fetch-secret-prefix requires POD_NAME and POD_NAMESPACE env vars")
-		}
-		ord, err := podOrdinal(podName)
-		if err != nil {
+		if err := runAPIFetchPrefix(ctx, apiFetchSecretPrefix, dst); err != nil {
 			return err
 		}
-		name := apiFetchSecretPrefix + ord + "-keys"
-		cfg, err := rest.InClusterConfig()
-		if err != nil {
-			return fmt.Errorf("in-cluster config: %w", err)
-		}
-		cs, err := kubernetes.NewForConfig(cfg)
-		if err != nil {
-			return fmt.Errorf("kubernetes client: %w", err)
-		}
-		if err := fetchSecretToDir(ctx, cs, podNamespace, name, dst); err != nil {
-			return fmt.Errorf("api-fetch-prefix: %w", err)
-		}
-		slog.Info("tor-init: api-fetched per-pod secret", "name", name)
 	}
 
 	if src != "" {
@@ -213,6 +187,48 @@ func run(ctx context.Context, src, dst, clientAuthSrc, obMasterAddress, apiFetch
 	}
 
 	return nil
+}
+
+func runAPIFetch(ctx context.Context, apiFetchSecret, dst string) error {
+	parts := strings.SplitN(apiFetchSecret, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("--api-fetch-secret expects NAMESPACE/NAME, got %q", apiFetchSecret)
+	}
+	if err := apiFetchSecretToDir(ctx, parts[0], parts[1], dst); err != nil {
+		return fmt.Errorf("api-fetch: %w", err)
+	}
+	slog.Info("tor-init: api-fetched secret", "ref", apiFetchSecret)
+	return nil
+}
+
+func runAPIFetchPrefix(ctx context.Context, prefix, dst string) error {
+	podName := os.Getenv("POD_NAME")
+	podNamespace := os.Getenv("POD_NAMESPACE")
+	if podName == "" || podNamespace == "" {
+		return fmt.Errorf("--api-fetch-secret-prefix requires POD_NAME and POD_NAMESPACE env vars")
+	}
+	ord, err := podOrdinal(podName)
+	if err != nil {
+		return err
+	}
+	name := prefix + ord + "-keys"
+	if err := apiFetchSecretToDir(ctx, podNamespace, name, dst); err != nil {
+		return fmt.Errorf("api-fetch-prefix: %w", err)
+	}
+	slog.Info("tor-init: api-fetched per-pod secret", "name", name)
+	return nil
+}
+
+func apiFetchSecretToDir(ctx context.Context, namespace, name, dst string) error {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		return fmt.Errorf("in-cluster config: %w", err)
+	}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("kubernetes client: %w", err)
+	}
+	return fetchSecretToDir(ctx, cs, namespace, name, dst)
 }
 
 func writeObConfig(hsDir, addr string) error {

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -475,16 +476,16 @@ func TestBuildFrontendRole(t *testing.T) {
 	}
 	var sawGet, sawListWatch bool
 	for _, r := range role.Rules {
-		if len(r.Resources) != 1 || r.Resources[0] != "secrets" {
+		if len(r.Resources) != 1 || r.Resources[0] != rbacResSecrets {
 			t.Errorf("expected only secrets; got %v", r.Resources)
 		}
-		if len(r.Verbs) == 1 && r.Verbs[0] == "get" {
+		if len(r.Verbs) == 1 && r.Verbs[0] == rbacVerbGet {
 			sawGet = true
 			if len(r.ResourceNames) == 0 {
 				t.Error("get rule must have resourceNames")
 			}
 		}
-		if contains(r.Verbs, "list") && contains(r.Verbs, "watch") {
+		if slices.Contains(r.Verbs, "list") && slices.Contains(r.Verbs, "watch") {
 			sawListWatch = true
 			if len(r.ResourceNames) != 0 {
 				t.Errorf("list/watch rule must not have resourceNames; got %v", r.ResourceNames)
@@ -511,7 +512,7 @@ func TestBuildFrontendRoleBinding(t *testing.T) {
 	if rb.RoleRef.Name != FrontendName(gw) {
 		t.Errorf("roleRef: %v", rb.RoleRef)
 	}
-	if len(rb.Subjects) != 1 || rb.Subjects[0].Name != FrontendName(gw) || rb.Subjects[0].Kind != "ServiceAccount" {
+	if len(rb.Subjects) != 1 || rb.Subjects[0].Name != FrontendName(gw) || rb.Subjects[0].Kind != rbacv1.ServiceAccountKind {
 		t.Errorf("subjects: %v", rb.Subjects)
 	}
 }
@@ -698,14 +699,14 @@ func TestBuildBackendKeySecret_OwnerUIDLabel(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "blog",
 			Namespace: "default",
-			UID:       "abc-123",
+			UID:       testGwUID,
 		},
 	}
 	s, err := BuildBackendKeySecret(gw, 0, nil, testScheme(t))
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if got := s.Labels["torgateway.io/owner-uid"]; got != "abc-123" {
+	if got := s.Labels["torgateway.io/owner-uid"]; got != testGwUID {
 		t.Errorf("owner-uid = %q, want abc-123", got)
 	}
 }
@@ -721,8 +722,8 @@ func mapKeys[K comparable, V any](m map[K]V) []K {
 func TestBuildFrontendDeployment_NoSecretVolumeForMasterKey(t *testing.T) {
 	gw := sampleGateway()
 	obp := samplePolicy(1)
-	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns"
-	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	obp.Spec.MasterKeySecretRef.Namespace = testMasterSecretNS
+	obp.Spec.MasterKeySecretRef.Name = testMasterSecretName
 	dep, err := BuildFrontendDeployment(gw, obp, tor.OnionAddress{}, sampleImages(), false, testScheme(t))
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -742,8 +743,8 @@ func TestBuildFrontendDeployment_NoSecretVolumeForMasterKey(t *testing.T) {
 func TestBuildFrontendDeployment_MasterFetchInitContainer(t *testing.T) {
 	gw := sampleGateway()
 	obp := samplePolicy(1)
-	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns"
-	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	obp.Spec.MasterKeySecretRef.Namespace = testMasterSecretNS
+	obp.Spec.MasterKeySecretRef.Name = testMasterSecretName
 	dep, err := BuildFrontendDeployment(gw, obp, tor.OnionAddress{}, sampleImages(), false, testScheme(t))
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -788,7 +789,7 @@ func TestBuildFrontendDeployment_MasterFetchUsesGatewayNamespaceWhenMasterRefNam
 	gw := sampleGateway()
 	obp := samplePolicy(1)
 	obp.Spec.MasterKeySecretRef.Namespace = ""
-	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	obp.Spec.MasterKeySecretRef.Name = testMasterSecretName
 	dep, err := BuildFrontendDeployment(gw, obp, tor.OnionAddress{}, sampleImages(), false, testScheme(t))
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -868,36 +869,26 @@ func TestBuildBackendTorrcConfigMap_PropagatesTestingNetworkInclude(t *testing.T
 	}
 }
 
-// contains reports whether val appears in slice.
-func contains(slice []string, val string) bool {
-	for _, s := range slice {
-		if s == val {
-			return true
-		}
-	}
-	return false
-}
-
 func TestBuildCrossNSMasterRole_ScopedToMasterSecret(t *testing.T) {
 	gw := sampleGateway()
-	gw.UID = "abc-123"
+	gw.UID = testGwUID
 	obp := samplePolicy(1)
-	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns"
-	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	obp.Spec.MasterKeySecretRef.Namespace = testMasterSecretNS
+	obp.Spec.MasterKeySecretRef.Name = testMasterSecretName
 	role, err := BuildCrossNSMasterRole(gw, obp, testScheme(t))
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if role.Namespace != "secrets-ns" {
+	if role.Namespace != testMasterSecretNS {
 		t.Errorf("role namespace = %q, want secrets-ns", role.Namespace)
 	}
 	if len(role.Rules) != 1 {
 		t.Fatalf("rules len = %d, want 1", len(role.Rules))
 	}
-	if !reflect.DeepEqual(role.Rules[0].ResourceNames, []string{"ob-master"}) {
+	if !reflect.DeepEqual(role.Rules[0].ResourceNames, []string{testMasterSecretName}) {
 		t.Errorf("resourceNames = %v, want [ob-master]", role.Rules[0].ResourceNames)
 	}
-	if role.Labels["torgateway.io/owner-uid"] != "abc-123" {
+	if role.Labels["torgateway.io/owner-uid"] != testGwUID {
 		t.Errorf("owner-uid label missing")
 	}
 	if role.Labels["torgateway.io/gateway-ns"] != gw.Namespace {
@@ -917,15 +908,15 @@ func TestBuildCrossNSMasterRole_RejectsEmptyNamespace(t *testing.T) {
 
 func TestBuildCrossNSMasterRoleBinding_LinksFrontendSA(t *testing.T) {
 	gw := sampleGateway()
-	gw.UID = "abc-123"
+	gw.UID = testGwUID
 	obp := samplePolicy(1)
-	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns"
-	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	obp.Spec.MasterKeySecretRef.Namespace = testMasterSecretNS
+	obp.Spec.MasterKeySecretRef.Name = testMasterSecretName
 	rb, err := BuildCrossNSMasterRoleBinding(gw, obp, testScheme(t))
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if rb.Namespace != "secrets-ns" {
+	if rb.Namespace != testMasterSecretNS {
 		t.Errorf("rolebinding namespace = %q, want secrets-ns", rb.Namespace)
 	}
 	if len(rb.Subjects) != 1 ||
@@ -942,7 +933,7 @@ func TestBuildCrossNSMasterRoleBinding_LinksFrontendSA(t *testing.T) {
 func TestBuildFrontendRole_GetIsResourceNamesScoped(t *testing.T) {
 	gw := sampleGateway()
 	obp := samplePolicy(3)
-	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	obp.Spec.MasterKeySecretRef.Name = testMasterSecretName
 	obp.Spec.MasterKeySecretRef.Namespace = "" // same NS
 	role, err := BuildFrontendRole(gw, obp, testScheme(t))
 	if err != nil {
@@ -951,13 +942,13 @@ func TestBuildFrontendRole_GetIsResourceNamesScoped(t *testing.T) {
 	var gotGet, gotListWatch bool
 	for _, r := range role.Rules {
 		switch {
-		case len(r.Verbs) == 1 && r.Verbs[0] == "get":
+		case len(r.Verbs) == 1 && r.Verbs[0] == rbacVerbGet:
 			gotGet = true
 			wantNames := []string{
 				BackendKeySecretName(gw, 0),
 				BackendKeySecretName(gw, 1),
 				BackendKeySecretName(gw, 2),
-				"ob-master",
+				testMasterSecretName,
 			}
 			gotNames := append([]string(nil), r.ResourceNames...)
 			sort.Strings(gotNames)
@@ -965,7 +956,7 @@ func TestBuildFrontendRole_GetIsResourceNamesScoped(t *testing.T) {
 			if !reflect.DeepEqual(gotNames, wantNames) {
 				t.Errorf("get resourceNames = %v, want %v", gotNames, wantNames)
 			}
-		case len(r.Verbs) == 2 && contains(r.Verbs, "list") && contains(r.Verbs, "watch"):
+		case len(r.Verbs) == 2 && slices.Contains(r.Verbs, "list") && slices.Contains(r.Verbs, "watch"):
 			gotListWatch = true
 			if len(r.ResourceNames) != 0 {
 				t.Errorf("list/watch rule must not have resourceNames; got %v", r.ResourceNames)
@@ -982,7 +973,7 @@ func TestBuildFrontendRole_GetIsResourceNamesScoped(t *testing.T) {
 
 func TestBuildFrontendDeployment_ObrefreshGatewayUIDArg(t *testing.T) {
 	gw := sampleGateway()
-	gw.UID = "abc-123"
+	gw.UID = testGwUID
 	obp := samplePolicy(3)
 	dep, err := BuildFrontendDeployment(gw, obp, tor.OnionAddress{}, sampleImages(), false, testScheme(t))
 	if err != nil {
@@ -1007,8 +998,8 @@ func TestBuildFrontendDeployment_ObrefreshGatewayUIDArg(t *testing.T) {
 func TestBuildFrontendRole_CrossNSMasterOmitsFromInNSResourceNames(t *testing.T) {
 	gw := sampleGateway()
 	obp := samplePolicy(2)
-	obp.Spec.MasterKeySecretRef.Name = "ob-master"
-	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns" // different from gw.Namespace
+	obp.Spec.MasterKeySecretRef.Name = testMasterSecretName
+	obp.Spec.MasterKeySecretRef.Namespace = testMasterSecretNS // different from gw.Namespace
 	role, err := BuildFrontendRole(gw, obp, testScheme(t))
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -1016,7 +1007,7 @@ func TestBuildFrontendRole_CrossNSMasterOmitsFromInNSResourceNames(t *testing.T)
 	for _, r := range role.Rules {
 		if len(r.Verbs) == 1 && r.Verbs[0] == "get" {
 			for _, n := range r.ResourceNames {
-				if n == "ob-master" {
+				if n == testMasterSecretName {
 					t.Fatalf("cross-NS master should NOT be in in-namespace get resourceNames; got %v", r.ResourceNames)
 				}
 			}

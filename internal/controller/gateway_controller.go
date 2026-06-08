@@ -597,58 +597,8 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 	}
 
 	if pol.Spec.MasterKeySecretRef.Namespace != "" && pol.Spec.MasterKeySecretRef.Namespace != gw.Namespace {
-		ok, err := MasterKeyReferenceGrantAllows(ctx, r.Client, gw, pol)
-		if err != nil {
-			return fmt.Errorf("ReferenceGrant check: %w", err)
-		}
-		if !ok {
-			return fmt.Errorf("ReferenceGrant missing for cross-NS master Secret %s/%s",
-				pol.Spec.MasterKeySecretRef.Namespace, pol.Spec.MasterKeySecretRef.Name)
-		}
-		role, err := BuildCrossNSMasterRole(gw, pol, r.Scheme)
-		if err != nil {
+		if err := r.ensureCrossNSMasterRBAC(ctx, gw, pol); err != nil {
 			return err
-		}
-		if err := r.ensureHARole(ctx, role); err != nil {
-			return fmt.Errorf("cross-NS Role: %w", err)
-		}
-		rb, err := BuildCrossNSMasterRoleBinding(gw, pol, r.Scheme)
-		if err != nil {
-			return err
-		}
-		if err := r.ensureHARoleBinding(ctx, rb); err != nil {
-			return fmt.Errorf("cross-NS RoleBinding: %w", err)
-		}
-
-		// GC stale cross-NS Role/RoleBinding pairs from namespaces no longer in the OBP spec.
-		currentNS := pol.Spec.MasterKeySecretRef.Namespace
-		staleLabels := client.MatchingLabels{
-			"app.kubernetes.io/managed-by": "tor-gateway",
-			"torgateway.io/owner-uid":      string(gw.UID),
-		}
-		var staleRoles rbacv1.RoleList
-		if err := r.List(ctx, &staleRoles, staleLabels); err != nil {
-			return fmt.Errorf("list stale cross-NS roles: %w", err)
-		}
-		for i := range staleRoles.Items {
-			if staleRoles.Items[i].Namespace == currentNS {
-				continue
-			}
-			if err := client.IgnoreNotFound(r.Delete(ctx, &staleRoles.Items[i])); err != nil {
-				return fmt.Errorf("delete stale cross-NS role: %w", err)
-			}
-		}
-		var staleRBs rbacv1.RoleBindingList
-		if err := r.List(ctx, &staleRBs, staleLabels); err != nil {
-			return fmt.Errorf("list stale cross-NS rolebindings: %w", err)
-		}
-		for i := range staleRBs.Items {
-			if staleRBs.Items[i].Namespace == currentNS {
-				continue
-			}
-			if err := client.IgnoreNotFound(r.Delete(ctx, &staleRBs.Items[i])); err != nil {
-				return fmt.Errorf("delete stale cross-NS rolebinding: %w", err)
-			}
 		}
 	}
 
@@ -754,6 +704,65 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 	}
 
 	return r.updateStatusModeB(ctx, gw, master, pol)
+}
+
+// ensureCrossNSMasterRBAC handles the cross-namespace Role/RoleBinding that lets the
+// frontend SA read the master Secret in another namespace, plus GC of stale pairs
+// from namespaces no longer named by the OBP.
+func (r *GatewayReconciler) ensureCrossNSMasterRBAC(ctx context.Context, gw *gwv1.Gateway, pol *policyv1alpha1.OnionBalancePolicy) error {
+	ok, err := MasterKeyReferenceGrantAllows(ctx, r.Client, gw, pol)
+	if err != nil {
+		return fmt.Errorf("ReferenceGrant check: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("ReferenceGrant missing for cross-NS master Secret %s/%s",
+			pol.Spec.MasterKeySecretRef.Namespace, pol.Spec.MasterKeySecretRef.Name)
+	}
+	role, err := BuildCrossNSMasterRole(gw, pol, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHARole(ctx, role); err != nil {
+		return fmt.Errorf("cross-NS Role: %w", err)
+	}
+	rb, err := BuildCrossNSMasterRoleBinding(gw, pol, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.ensureHARoleBinding(ctx, rb); err != nil {
+		return fmt.Errorf("cross-NS RoleBinding: %w", err)
+	}
+
+	currentNS := pol.Spec.MasterKeySecretRef.Namespace
+	staleLabels := client.MatchingLabels{
+		"app.kubernetes.io/managed-by": "tor-gateway",
+		"torgateway.io/owner-uid":      string(gw.UID),
+	}
+	var staleRoles rbacv1.RoleList
+	if err := r.List(ctx, &staleRoles, staleLabels); err != nil {
+		return fmt.Errorf("list stale cross-NS roles: %w", err)
+	}
+	for i := range staleRoles.Items {
+		if staleRoles.Items[i].Namespace == currentNS {
+			continue
+		}
+		if err := client.IgnoreNotFound(r.Delete(ctx, &staleRoles.Items[i])); err != nil {
+			return fmt.Errorf("delete stale cross-NS role: %w", err)
+		}
+	}
+	var staleRBs rbacv1.RoleBindingList
+	if err := r.List(ctx, &staleRBs, staleLabels); err != nil {
+		return fmt.Errorf("list stale cross-NS rolebindings: %w", err)
+	}
+	for i := range staleRBs.Items {
+		if staleRBs.Items[i].Namespace == currentNS {
+			continue
+		}
+		if err := client.IgnoreNotFound(r.Delete(ctx, &staleRBs.Items[i])); err != nil {
+			return fmt.Errorf("delete stale cross-NS rolebinding: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *GatewayReconciler) ensureBackendKeySecret(ctx context.Context, want *corev1.Secret) error {

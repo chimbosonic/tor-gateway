@@ -32,6 +32,12 @@ import (
 	"github.com/chimbosonic/tor-gateway/internal/tor"
 )
 
+const (
+	testGwUID            = "abc-123"
+	testMasterSecretName = "ob-master"
+	testMasterSecretNS   = "secrets-ns"
+)
+
 // testSchemeWithGrants returns a scheme that also includes the Gateway API
 // v1beta1 types (ReferenceGrant) in addition to the base testScheme types.
 func testSchemeWithGrants(t *testing.T) *runtime.Scheme {
@@ -71,10 +77,10 @@ func TestEnsureModeB_RejectsCrossNSWithoutReferenceGrant(t *testing.T) {
 	ctx := context.Background()
 	gw := sampleGateway()
 	obp := samplePolicy(3)
-	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns"
-	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	obp.Spec.MasterKeySecretRef.Namespace = testMasterSecretNS
+	obp.Spec.MasterKeySecretRef.Name = testMasterSecretName
 	masterSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "ob-master", Namespace: "secrets-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: testMasterSecretName, Namespace: testMasterSecretNS},
 		Data:       validMasterSecretData(t),
 	}
 	// No ReferenceGrant present.
@@ -98,14 +104,14 @@ func TestEnsureModeB_CreatesCrossNSRoleBinding(t *testing.T) {
 	ctx := context.Background()
 	gw := sampleGateway()
 	obp := samplePolicy(3)
-	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns"
-	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	obp.Spec.MasterKeySecretRef.Namespace = testMasterSecretNS
+	obp.Spec.MasterKeySecretRef.Name = testMasterSecretName
 	masterSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "ob-master", Namespace: "secrets-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: testMasterSecretName, Namespace: testMasterSecretNS},
 		Data:       validMasterSecretData(t),
 	}
 	rg := &gwv1beta1.ReferenceGrant{
-		ObjectMeta: metav1.ObjectMeta{Name: "allow-blog", Namespace: "secrets-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "allow-blog", Namespace: testMasterSecretNS},
 		Spec: gwv1beta1.ReferenceGrantSpec{
 			From: []gwv1beta1.ReferenceGrantFrom{{
 				Group:     "policy.torgateway.io",
@@ -127,11 +133,11 @@ func TestEnsureModeB_CreatesCrossNSRoleBinding(t *testing.T) {
 		t.Fatalf("ensureModeB: %v", err)
 	}
 	var rb rbacv1.RoleBinding
-	if err := cl.Get(ctx, types.NamespacedName{Namespace: "secrets-ns", Name: CrossNSMasterRoleName(gw)}, &rb); err != nil {
+	if err := cl.Get(ctx, types.NamespacedName{Namespace: testMasterSecretNS, Name: CrossNSMasterRoleName(gw)}, &rb); err != nil {
 		t.Fatalf("cross-NS RoleBinding not created: %v", err)
 	}
 	var role rbacv1.Role
-	if err := cl.Get(ctx, types.NamespacedName{Namespace: "secrets-ns", Name: CrossNSMasterRoleName(gw)}, &role); err != nil {
+	if err := cl.Get(ctx, types.NamespacedName{Namespace: testMasterSecretNS, Name: CrossNSMasterRoleName(gw)}, &role); err != nil {
 		t.Fatalf("cross-NS Role not created: %v", err)
 	}
 }
@@ -159,10 +165,10 @@ func TestCleanupModeBResources_DeletesOnionbalanceConfigMap(t *testing.T) {
 func TestEnsureModeB_GCsStaleCrossNSPairs(t *testing.T) {
 	ctx := context.Background()
 	gw := sampleGateway()
-	gw.UID = "abc-123"
+	gw.UID = testGwUID
 	obp := samplePolicy(3)
 	obp.Spec.MasterKeySecretRef.Namespace = "secrets-ns-new"
-	obp.Spec.MasterKeySecretRef.Name = "ob-master"
+	obp.Spec.MasterKeySecretRef.Name = testMasterSecretName
 
 	staleRole := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
@@ -170,7 +176,7 @@ func TestEnsureModeB_GCsStaleCrossNSPairs(t *testing.T) {
 			Namespace: "secrets-ns-old",
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "tor-gateway",
-				"torgateway.io/owner-uid":      "abc-123",
+				"torgateway.io/owner-uid":      testGwUID,
 			},
 		},
 	}
@@ -180,12 +186,12 @@ func TestEnsureModeB_GCsStaleCrossNSPairs(t *testing.T) {
 			Namespace: "secrets-ns-old",
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "tor-gateway",
-				"torgateway.io/owner-uid":      "abc-123",
+				"torgateway.io/owner-uid":      testGwUID,
 			},
 		},
 	}
 	masterSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "ob-master", Namespace: "secrets-ns-new"},
+		ObjectMeta: metav1.ObjectMeta{Name: testMasterSecretName, Namespace: "secrets-ns-new"},
 		Data:       validMasterSecretData(t),
 	}
 	rg := &gwv1beta1.ReferenceGrant{
@@ -232,24 +238,24 @@ func TestEnsureModeB_GCsStaleCrossNSPairs(t *testing.T) {
 func TestCleanupModeBResources_GCsAllCrossNSPairs(t *testing.T) {
 	ctx := context.Background()
 	gw := sampleGateway()
-	gw.UID = "abc-123"
+	gw.UID = testGwUID
 	crossNSRole := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      CrossNSMasterRoleName(gw),
-			Namespace: "secrets-ns",
+			Namespace: testMasterSecretNS,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "tor-gateway",
-				"torgateway.io/owner-uid":      "abc-123",
+				"torgateway.io/owner-uid":      testGwUID,
 			},
 		},
 	}
 	crossNSRB := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      CrossNSMasterRoleName(gw),
-			Namespace: "secrets-ns",
+			Namespace: testMasterSecretNS,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "tor-gateway",
-				"torgateway.io/owner-uid":      "abc-123",
+				"torgateway.io/owner-uid":      testGwUID,
 			},
 		},
 	}
@@ -258,11 +264,11 @@ func TestCleanupModeBResources_GCsAllCrossNSPairs(t *testing.T) {
 	if err := r.cleanupModeBResources(ctx, gw); err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
-	err := cl.Get(ctx, types.NamespacedName{Namespace: "secrets-ns", Name: CrossNSMasterRoleName(gw)}, &rbacv1.Role{})
+	err := cl.Get(ctx, types.NamespacedName{Namespace: testMasterSecretNS, Name: CrossNSMasterRoleName(gw)}, &rbacv1.Role{})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("cross-NS Role should be deleted; got %v", err)
 	}
-	err = cl.Get(ctx, types.NamespacedName{Namespace: "secrets-ns", Name: CrossNSMasterRoleName(gw)}, &rbacv1.RoleBinding{})
+	err = cl.Get(ctx, types.NamespacedName{Namespace: testMasterSecretNS, Name: CrossNSMasterRoleName(gw)}, &rbacv1.RoleBinding{})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("cross-NS RoleBinding should be deleted; got %v", err)
 	}
