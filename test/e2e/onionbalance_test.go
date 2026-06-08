@@ -562,9 +562,17 @@ spec:
 		Label("networkpolicy", "onionbalance"), func() {
 			const npName = "ha-gw-netpol"
 
-			By("fetching the per-Gateway NetworkPolicy")
-			npOut, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "networkpolicy", npName, "-o", "json"))
-			Expect(err).NotTo(HaveOccurred(), "NetworkPolicy %s should exist in %s", npName, obpNS)
+			By("waiting for the per-Gateway NetworkPolicy to be reconciled")
+			var npOut string
+			Eventually(func() error {
+				out, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "networkpolicy", npName, "-o", "json"))
+				if err != nil {
+					return err
+				}
+				npOut = out
+				return nil
+			}, "30s", "2s").Should(Succeed(), "NetworkPolicy %s should exist in %s", npName, obpNS)
+
 			var np networkingv1.NetworkPolicy
 			Expect(json.Unmarshal([]byte(npOut), &np)).To(Succeed())
 
