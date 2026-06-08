@@ -90,6 +90,9 @@ func NewRefresher(_ context.Context, cfg RefresherConfig) (*Refresher, error) {
 	if cfg.OwnerUID == "" {
 		return nil, errors.New("onionbalance: OwnerUID is required")
 	}
+	if cfg.Master.String() == "" {
+		return nil, errors.New("onionbalance: Master is required")
+	}
 	if cfg.Interval <= 0 {
 		cfg.Interval = 30 * time.Second
 	}

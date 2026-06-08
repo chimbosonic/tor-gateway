@@ -125,6 +125,7 @@ func TestRefresherRequiresMandatoryFields(t *testing.T) {
 		{"missing master path", RefresherConfig{GatewayName: "g", GatewayNamespace: "ns", ConfigPath: "/c", PIDFile: "/p", OwnerUID: "uid", Client: fake.NewClientset()}},
 		{"missing client", RefresherConfig{GatewayName: "g", GatewayNamespace: "ns", ConfigPath: "/c", PIDFile: "/p", MasterKeyPath: "/k", OwnerUID: "uid"}},
 		{"missing owner uid", RefresherConfig{GatewayName: "g", GatewayNamespace: "ns", ConfigPath: "/c", PIDFile: "/p", MasterKeyPath: "/k", Client: fake.NewClientset()}},
+		{"missing master", RefresherConfig{GatewayName: "g", GatewayNamespace: "ns", ConfigPath: "/c", PIDFile: "/p", MasterKeyPath: "/k", OwnerUID: "uid", Client: fake.NewClientset()}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
