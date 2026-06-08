@@ -22,8 +22,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
 	"github.com/chimbosonic/tor-gateway/internal/tor"
@@ -230,10 +233,123 @@ func powForcedOff(ctx context.Context, c client.Client, gw *gwv1.Gateway) bool {
 	return false
 }
 
+// obpsForSecret returns reconcile requests for every OBP referencing the
+// changed Secret as its master key.
+func (r *OnionBalancePolicyReconciler) obpsForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	s, ok := obj.(*corev1.Secret)
+	if !ok {
+		return nil
+	}
+	var list policyv1alpha1.OnionBalancePolicyList
+	if err := r.List(ctx, &list); err != nil {
+		return nil
+	}
+	var out []reconcile.Request
+	for i := range list.Items {
+		p := &list.Items[i]
+		ns := p.Spec.MasterKeySecretRef.Namespace
+		if ns == "" {
+			ns = p.Namespace
+		}
+		if ns == s.Namespace && p.Spec.MasterKeySecretRef.Name == s.Name {
+			out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}})
+			continue
+		}
+		// Also requeue when the Secret looks like a backend key Secret owned by a Gateway the OBP targets.
+		if s.Labels["torgateway.io/role"] == "backend" && s.Labels["torgateway.io/gateway"] != "" {
+			for _, ref := range p.Spec.TargetRefs {
+				if string(ref.Name) == s.Labels["torgateway.io/gateway"] && s.Namespace == p.Namespace {
+					out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}})
+				}
+			}
+		}
+	}
+	return out
+}
+
+// obpsForGateway returns OBPs that target the changed Gateway.
+func (r *OnionBalancePolicyReconciler) obpsForGateway(ctx context.Context, obj client.Object) []reconcile.Request {
+	gw, ok := obj.(*gwv1.Gateway)
+	if !ok {
+		return nil
+	}
+	var list policyv1alpha1.OnionBalancePolicyList
+	if err := r.List(ctx, &list, client.InNamespace(gw.Namespace)); err != nil {
+		return nil
+	}
+	var out []reconcile.Request
+	for i := range list.Items {
+		for _, ref := range list.Items[i].Spec.TargetRefs {
+			if string(ref.Name) == gw.Name {
+				out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace}})
+			}
+		}
+	}
+	return out
+}
+
+// obpsForReferenceGrant returns OBPs whose master Secret namespace matches the
+// grant's namespace AND whose policy namespace matches a "from" entry on the grant.
+func (r *OnionBalancePolicyReconciler) obpsForReferenceGrant(ctx context.Context, obj client.Object) []reconcile.Request {
+	rg, ok := obj.(*gwv1beta1.ReferenceGrant)
+	if !ok {
+		return nil
+	}
+	var list policyv1alpha1.OnionBalancePolicyList
+	if err := r.List(ctx, &list); err != nil {
+		return nil
+	}
+	var out []reconcile.Request
+	for i := range list.Items {
+		p := &list.Items[i]
+		if p.Spec.MasterKeySecretRef.Namespace == "" || p.Spec.MasterKeySecretRef.Namespace != rg.Namespace {
+			continue
+		}
+		for _, f := range rg.Spec.From {
+			if string(f.Group) == policyv1alpha1.GroupVersion.Group && string(f.Kind) == "OnionBalancePolicy" && string(f.Namespace) == p.Namespace {
+				out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}})
+				break
+			}
+		}
+	}
+	return out
+}
+
+// obpsForTorServicePolicy returns OBPs targeting any Gateway the TSP targets.
+func (r *OnionBalancePolicyReconciler) obpsForTorServicePolicy(ctx context.Context, obj client.Object) []reconcile.Request {
+	tsp, ok := obj.(*policyv1alpha1.TorServicePolicy)
+	if !ok {
+		return nil
+	}
+	var list policyv1alpha1.OnionBalancePolicyList
+	if err := r.List(ctx, &list, client.InNamespace(tsp.Namespace)); err != nil {
+		return nil
+	}
+	var gwNames []string
+	for _, ref := range tsp.Spec.TargetRefs {
+		gwNames = append(gwNames, string(ref.Name))
+	}
+	var out []reconcile.Request
+	for i := range list.Items {
+		for _, ref := range list.Items[i].Spec.TargetRefs {
+			for _, n := range gwNames {
+				if string(ref.Name) == n {
+					out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace}})
+				}
+			}
+		}
+	}
+	return out
+}
+
 // SetupWithManager registers the reconciler.
 func (r *OnionBalancePolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&policyv1alpha1.OnionBalancePolicy{}).
 		Named("onionbalancepolicy").
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.obpsForSecret)).
+		Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.obpsForGateway)).
+		Watches(&gwv1beta1.ReferenceGrant{}, handler.EnqueueRequestsFromMapFunc(r.obpsForReferenceGrant)).
+		Watches(&policyv1alpha1.TorServicePolicy{}, handler.EnqueueRequestsFromMapFunc(r.obpsForTorServicePolicy)).
 		Complete(r)
 }

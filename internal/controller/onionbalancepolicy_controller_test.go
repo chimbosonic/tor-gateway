@@ -12,6 +12,7 @@ package controller
 
 import (
 	"context"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -19,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
@@ -428,4 +430,210 @@ func assertOBPAccepted(pol *policyv1alpha1.OnionBalancePolicy, status metav1.Con
 		}
 	}
 	Fail("onionbalance policy ancestor missing Accepted condition")
+}
+
+const testOBPName = "blog-obp"
+
+func TestOnionBalancePolicyReconciler_WatchSecretRequeuesOBP(t *testing.T) {
+	obp := &policyv1alpha1.OnionBalancePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: testOBPName, Namespace: "default"},
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "ob-master"},
+			TargetRefs: []gwv1.LocalPolicyTargetReference{
+				{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "blog"},
+			},
+			Replicas: 3,
+		},
+	}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ob-master", Namespace: "default"}}
+
+	r := &OnionBalancePolicyReconciler{Client: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obp, secret).Build()}
+	reqs := r.obpsForSecret(context.Background(), secret)
+	if len(reqs) != 1 || reqs[0].Name != testOBPName {
+		t.Fatalf("expected 1 request for blog-obp, got %+v", reqs)
+	}
+}
+
+func TestOnionBalancePolicyReconciler_WatchSecretNoMatchRequeuesNothing(t *testing.T) {
+	obp := &policyv1alpha1.OnionBalancePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: testOBPName, Namespace: "default"},
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "ob-master"},
+			TargetRefs: []gwv1.LocalPolicyTargetReference{
+				{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "blog"},
+			},
+			Replicas: 3,
+		},
+	}
+	otherSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "other-secret", Namespace: "default"}}
+
+	r := &OnionBalancePolicyReconciler{Client: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obp).Build()}
+	reqs := r.obpsForSecret(context.Background(), otherSecret)
+	if len(reqs) != 0 {
+		t.Fatalf("expected 0 requests, got %+v", reqs)
+	}
+}
+
+func TestOnionBalancePolicyReconciler_WatchGatewayRequeuesOBP(t *testing.T) {
+	obp := &policyv1alpha1.OnionBalancePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: testOBPName, Namespace: "default"},
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "ob-master"},
+			TargetRefs: []gwv1.LocalPolicyTargetReference{
+				{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "blog"},
+			},
+			Replicas: 3,
+		},
+	}
+	gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "blog", Namespace: "default"}}
+
+	r := &OnionBalancePolicyReconciler{Client: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obp).Build()}
+	reqs := r.obpsForGateway(context.Background(), gw)
+	if len(reqs) != 1 || reqs[0].Name != testOBPName {
+		t.Fatalf("expected 1 request for blog-obp, got %+v", reqs)
+	}
+}
+
+func TestOnionBalancePolicyReconciler_WatchGatewayNoMatchRequeuesNothing(t *testing.T) {
+	obp := &policyv1alpha1.OnionBalancePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: testOBPName, Namespace: "default"},
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "ob-master"},
+			TargetRefs: []gwv1.LocalPolicyTargetReference{
+				{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "blog"},
+			},
+			Replicas: 3,
+		},
+	}
+	otherGw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "other-gateway", Namespace: "default"}}
+
+	r := &OnionBalancePolicyReconciler{Client: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obp).Build()}
+	reqs := r.obpsForGateway(context.Background(), otherGw)
+	if len(reqs) != 0 {
+		t.Fatalf("expected 0 requests, got %+v", reqs)
+	}
+}
+
+func TestOnionBalancePolicyReconciler_WatchReferenceGrantRequeuesOBP(t *testing.T) {
+	obp := &policyv1alpha1.OnionBalancePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: testOBPName, Namespace: "default"},
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{
+				Name:      "ob-master",
+				Namespace: "secrets-ns",
+			},
+			TargetRefs: []gwv1.LocalPolicyTargetReference{
+				{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "blog"},
+			},
+			Replicas: 3,
+		},
+	}
+	rg := &gwv1beta1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "allow-obp", Namespace: "secrets-ns"},
+		Spec: gwv1beta1.ReferenceGrantSpec{
+			From: []gwv1beta1.ReferenceGrantFrom{{
+				Group:     gwv1.Group(policyv1alpha1.GroupVersion.Group),
+				Kind:      "OnionBalancePolicy",
+				Namespace: "default",
+			}},
+			To: []gwv1beta1.ReferenceGrantTo{{
+				Group: "",
+				Kind:  "Secret",
+			}},
+		},
+	}
+
+	r := &OnionBalancePolicyReconciler{Client: fake.NewClientBuilder().WithScheme(testSchemeWithGrants(t)).WithObjects(obp).Build()}
+	reqs := r.obpsForReferenceGrant(context.Background(), rg)
+	if len(reqs) != 1 || reqs[0].Name != testOBPName {
+		t.Fatalf("expected 1 request for blog-obp, got %+v", reqs)
+	}
+}
+
+func TestOnionBalancePolicyReconciler_WatchReferenceGrantNoMatchRequeuesNothing(t *testing.T) {
+	obp := &policyv1alpha1.OnionBalancePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: testOBPName, Namespace: "default"},
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{
+				Name:      "ob-master",
+				Namespace: "secrets-ns",
+			},
+			TargetRefs: []gwv1.LocalPolicyTargetReference{
+				{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "blog"},
+			},
+			Replicas: 3,
+		},
+	}
+	// ReferenceGrant in a different namespace — should not match
+	rg := &gwv1beta1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "allow-obp", Namespace: "other-ns"},
+		Spec: gwv1beta1.ReferenceGrantSpec{
+			From: []gwv1beta1.ReferenceGrantFrom{{
+				Group:     gwv1.Group(policyv1alpha1.GroupVersion.Group),
+				Kind:      "OnionBalancePolicy",
+				Namespace: "default",
+			}},
+		},
+	}
+
+	r := &OnionBalancePolicyReconciler{Client: fake.NewClientBuilder().WithScheme(testSchemeWithGrants(t)).WithObjects(obp).Build()}
+	reqs := r.obpsForReferenceGrant(context.Background(), rg)
+	if len(reqs) != 0 {
+		t.Fatalf("expected 0 requests, got %+v", reqs)
+	}
+}
+
+func TestOnionBalancePolicyReconciler_WatchTorServicePolicyRequeuesOBP(t *testing.T) {
+	obp := &policyv1alpha1.OnionBalancePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: testOBPName, Namespace: "default"},
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "ob-master"},
+			TargetRefs: []gwv1.LocalPolicyTargetReference{
+				{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "blog"},
+			},
+			Replicas: 3,
+		},
+	}
+	tsp := &policyv1alpha1.TorServicePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "blog-tsp", Namespace: "default"},
+		Spec: policyv1alpha1.TorServicePolicySpec{
+			TargetRefs: []gwv1.LocalPolicyTargetReference{
+				{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "blog"},
+			},
+		},
+	}
+
+	r := &OnionBalancePolicyReconciler{Client: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obp).Build()}
+	reqs := r.obpsForTorServicePolicy(context.Background(), tsp)
+	if len(reqs) != 1 || reqs[0].Name != testOBPName {
+		t.Fatalf("expected 1 request for blog-obp, got %+v", reqs)
+	}
+}
+
+func TestOnionBalancePolicyReconciler_WatchTorServicePolicyNoMatchRequeuesNothing(t *testing.T) {
+	obp := &policyv1alpha1.OnionBalancePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: testOBPName, Namespace: "default"},
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "ob-master"},
+			TargetRefs: []gwv1.LocalPolicyTargetReference{
+				{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "blog"},
+			},
+			Replicas: 3,
+		},
+	}
+	// TSP targets a different gateway — should not match
+	tsp := &policyv1alpha1.TorServicePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "other-tsp", Namespace: "default"},
+		Spec: policyv1alpha1.TorServicePolicySpec{
+			TargetRefs: []gwv1.LocalPolicyTargetReference{
+				{Group: "gateway.networking.k8s.io", Kind: "Gateway", Name: "other-gateway"},
+			},
+		},
+	}
+
+	r := &OnionBalancePolicyReconciler{Client: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obp).Build()}
+	reqs := r.obpsForTorServicePolicy(context.Background(), tsp)
+	if len(reqs) != 0 {
+		t.Fatalf("expected 0 requests, got %+v", reqs)
+	}
 }
