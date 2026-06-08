@@ -703,7 +703,7 @@ func BuildFrontendDeployment(
 					SecurityContext: haHardenedSecurityContext(),
 				},
 				{
-					Name:  "obrefresh",
+					Name:  obrefreshContainer,
 					Image: images.Obrefresh,
 					Args: []string{
 						"--gateway=" + gw.Name,
@@ -720,7 +720,15 @@ func BuildFrontendDeployment(
 							Exec: &corev1.ExecAction{
 								// The obrefresh image is distroless; the binary is
 								// copied in as /usr/local/bin/app (see Dockerfile).
-								Command: []string{"/usr/local/bin/app", "--healthcheck"},
+								// --interval must match the daemon's value so the
+								// healthcheck window (2×interval) covers the actual
+								// write cadence; omitting it would default to 30s and
+								// fire spuriously when RefreshInterval > 90s.
+								Command: []string{
+									"/usr/local/bin/app",
+									"--healthcheck",
+									"--interval=" + pol.Spec.RefreshInterval.Duration.String(),
+								},
 							},
 						},
 						InitialDelaySeconds: 60,

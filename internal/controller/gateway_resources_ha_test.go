@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -646,7 +647,7 @@ func TestBuildFrontendDeployment(t *testing.T) {
 	for _, c := range d.Spec.Template.Spec.Containers {
 		containers[c.Name] = c
 	}
-	for _, want := range []string{"tor", "onionbalance", "obrefresh"} {
+	for _, want := range []string{"tor", "onionbalance", obrefreshContainer} {
 		if _, ok := containers[want]; !ok {
 			t.Errorf("missing container %q; got containers: %v", want, mapKeys(containers))
 		}
@@ -666,13 +667,13 @@ func TestBuildFrontendDeployment(t *testing.T) {
 	}
 	// obrefresh must carry --master-address flag
 	foundArg := false
-	for _, a := range containers["obrefresh"].Args {
+	for _, a := range containers[obrefreshContainer].Args {
 		if a == "--master-address="+master.String() {
 			foundArg = true
 		}
 	}
 	if !foundArg {
-		t.Errorf("obrefresh must receive --master-address; got args: %v", containers["obrefresh"].Args)
+		t.Errorf("obrefresh must receive --master-address; got args: %v", containers[obrefreshContainer].Args)
 	}
 }
 
@@ -1016,7 +1017,7 @@ func TestBuildFrontendDeployment_ObrefreshGatewayUIDArg(t *testing.T) {
 	}
 	var sawArg bool
 	for _, c := range dep.Spec.Template.Spec.Containers {
-		if c.Name != "obrefresh" {
+		if c.Name != obrefreshContainer {
 			continue
 		}
 		for _, a := range c.Args {
@@ -1085,10 +1086,34 @@ func TestBuildFrontendDeployment_OnionbalanceLivenessProbe(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 	for _, c := range dep.Spec.Template.Spec.Containers {
-		if c.Name == "onionbalance" || c.Name == "obrefresh" {
+		if c.Name == "onionbalance" || c.Name == obrefreshContainer {
 			if c.LivenessProbe == nil {
 				t.Errorf("%s container missing LivenessProbe", c.Name)
 			}
 		}
 	}
+}
+
+func TestBuildFrontendDeployment_ObrefreshProbeUsesConfiguredInterval(t *testing.T) {
+	pol := samplePolicy(2)
+	pol.Spec.RefreshInterval = metav1.Duration{Duration: 120 * time.Second}
+	dep, err := BuildFrontendDeployment(sampleGateway(), pol, tor.OnionAddress{}, sampleImages(), false, testScheme(t))
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		if c.Name != obrefreshContainer {
+			continue
+		}
+		if c.LivenessProbe == nil || c.LivenessProbe.Exec == nil {
+			t.Fatal("obrefresh missing exec probe")
+		}
+		cmd := strings.Join(c.LivenessProbe.Exec.Command, " ")
+		want := (120 * time.Second).String() // "2m0s"
+		if !strings.Contains(cmd, want) {
+			t.Errorf("obrefresh probe must pass --interval=%v; got %v", want, c.LivenessProbe.Exec.Command)
+		}
+		return
+	}
+	t.Fatal("obrefresh container not found")
 }

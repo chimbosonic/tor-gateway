@@ -66,6 +66,7 @@ const (
 	hsDirVolumeName       = "tor-hsdir"
 	torContainerName      = "tor"
 	routerContainer       = "router"
+	obrefreshContainer    = "obrefresh"
 	initContainerName     = "tor-init"
 	managedByLabelKey     = "app.kubernetes.io/managed-by"
 	managedByLabelVal     = "tor-gateway"
