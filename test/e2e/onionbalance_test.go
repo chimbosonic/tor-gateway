@@ -21,11 +21,14 @@ package e2e
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -284,5 +287,58 @@ spec:
 		// Typical ~90s on warm Mac, more headroom for cold CI runners.
 		Eventually(fetchOverTor("ha-tor-client", "/"), "5m", "10s").
 			Should(Equal("backend-A"), "service should remain up after scale to 1 replica")
+	})
+
+	// Task 10: Mode B per-pod key isolation.
+	// Requires replicas=3; the prior spec scaled to 1, so we scale back up first.
+	It("isolates per-pod keys: a backend's tor container only sees its own onion key", Label("onionbalance"), func() {
+		const taskReplicas = 3
+
+		By("restoring OBP replicas to 3 for key-isolation assertions")
+		_, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "patch", "onionbalancepolicy", "ha-obp",
+			"--type=merge", "-p", `{"spec":{"replicas":3}}`))
+		Expect(err).NotTo(HaveOccurred(), "patch OBP replicas back to 3")
+
+		By("waiting for the StatefulSet to reach 3 ready replicas")
+		Eventually(func() string {
+			out, _ := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "statefulset", "ha-gw-backend",
+				"-o", "jsonpath={.status.readyReplicas}"))
+			return strings.TrimSpace(out)
+		}, 5*time.Minute, 5*time.Second).Should(Equal("3"), "StatefulSet should reach 3 ready replicas")
+
+		for i := range taskReplicas {
+			podName := fmt.Sprintf("ha-gw-backend-%d", i)
+
+			By(fmt.Sprintf("hashing the on-disk secret key in %s", podName))
+			// HiddenServiceDir is /var/lib/tor/hs/hs (hsServiceDir). tor-init writes
+			// the key pair there from the pod's own per-pod Secret (ha-gw-backend-{i}-keys).
+			onDiskOut, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "exec", podName, "-c", "tor", "--",
+				"sh", "-c", `sha256sum /var/lib/tor/hs/hs/hs_ed25519_secret_key | awk '{print $1}'`))
+			Expect(err).NotTo(HaveOccurred(), "sha256sum on-disk key in pod %s", podName)
+			secretHashOnDisk := strings.TrimSpace(onDiskOut)
+
+			By(fmt.Sprintf("hashing the corresponding Secret's bytes for pod %d", i))
+			b64Out, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "secret",
+				fmt.Sprintf("ha-gw-backend-%d-keys", i),
+				"-o", "jsonpath={.data.hs_ed25519_secret_key}"))
+			Expect(err).NotTo(HaveOccurred(), "fetch Secret ha-gw-backend-%d-keys", i)
+			decoded, decErr := base64.StdEncoding.DecodeString(strings.TrimSpace(b64Out))
+			Expect(decErr).NotTo(HaveOccurred(), "base64-decode secret key for pod %d", i)
+			wantHash := sha256.Sum256(decoded)
+			Expect(secretHashOnDisk).To(Equal(hex.EncodeToString(wantHash[:])),
+				"pod %s on-disk key should match its own Secret", podName)
+
+			By(fmt.Sprintf("confirming pod %s hs dir holds exactly one keypair (no other pods' keys)", podName))
+			// The emptyDir ("hs") is pod-local: each pod's HiddenServiceDir
+			// contains only its own pair. Listing the dir and counting
+			// ed25519 key files is the right negative check given that there
+			// is no per-backend-index subdirectory — tor-init writes the single
+			// pair directly into /var/lib/tor/hs/hs/.
+			lsOut, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "exec", podName, "-c", "tor", "--",
+				"sh", "-c", `find /var/lib/tor/hs/hs -maxdepth 1 -name 'hs_ed25519_*' | wc -l`))
+			Expect(err).NotTo(HaveOccurred(), "list hs dir in pod %s", podName)
+			Expect(strings.TrimSpace(lsOut)).To(Equal("2"),
+				"pod %s should have exactly 2 hs_ed25519_* files (secret + public key)", podName)
+		}
 	})
 })
