@@ -31,6 +31,7 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
+	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
 	"github.com/chimbosonic/tor-gateway/internal/tor"
 )
 
@@ -390,5 +391,134 @@ func TestEnsureModeB_ScaleDownGCsOnceReplicasMatch(t *testing.T) {
 		if !apierrors.IsNotFound(err) {
 			t.Errorf("orphan Secret backend-%d should be deleted after GC; got %v", i, err)
 		}
+	}
+}
+
+// --- findEffectiveOnionBalance helpers ---
+
+// sampleGatewayName returns a Gateway like sampleGateway() but with a custom name.
+func sampleGatewayName(name string) *gwv1.Gateway {
+	gw := sampleGateway()
+	gw.Name = name
+	return gw
+}
+
+// obpTargeting returns an OBP that targets a single Gateway by name.
+func obpTargeting(gw *gwv1.Gateway, obpName string) *policyv1alpha1.OnionBalancePolicy {
+	return &policyv1alpha1.OnionBalancePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: obpName, Namespace: gw.Namespace},
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			TargetRefs: []gwv1.LocalPolicyTargetReference{{
+				Group: GatewayAPIGroup,
+				Kind:  GatewayKind,
+				Name:  gwv1.ObjectName(gw.Name),
+			}},
+			Replicas:           1,
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "master"},
+		},
+	}
+}
+
+// obpTargetingMany returns an OBP that targets multiple Gateways by name.
+func obpTargetingMany(obpName string, gwNames ...string) *policyv1alpha1.OnionBalancePolicy {
+	refs := make([]gwv1.LocalPolicyTargetReference, 0, len(gwNames))
+	for _, n := range gwNames {
+		refs = append(refs, gwv1.LocalPolicyTargetReference{
+			Group: GatewayAPIGroup,
+			Kind:  GatewayKind,
+			Name:  gwv1.ObjectName(n),
+		})
+	}
+	return &policyv1alpha1.OnionBalancePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: obpName, Namespace: testGwNamespace},
+		Spec: policyv1alpha1.OnionBalancePolicySpec{
+			TargetRefs:         refs,
+			Replicas:           1,
+			MasterKeySecretRef: policyv1alpha1.MasterKeySecretRef{Name: "master"},
+		},
+	}
+}
+
+// makeAcceptedFor returns a status with a single Accepted=True ancestor for gw.
+func makeAcceptedFor(gw *gwv1.Gateway) policyv1alpha1.OnionBalancePolicyStatus {
+	ns := gwv1.Namespace(gw.Namespace)
+	kind := gwv1.Kind(GatewayKind)
+	group := gwv1.Group(GatewayAPIGroup)
+	return policyv1alpha1.OnionBalancePolicyStatus{
+		Ancestors: []gwv1.PolicyAncestorStatus{{
+			AncestorRef: gwv1.ParentReference{
+				Group:     &group,
+				Kind:      &kind,
+				Name:      gwv1.ObjectName(gw.Name),
+				Namespace: &ns,
+			},
+			ControllerName: ControllerName,
+			Conditions: []metav1.Condition{{
+				Type:   string(gwv1.PolicyConditionAccepted),
+				Status: metav1.ConditionTrue,
+				Reason: ReasonOBPAccepted,
+			}},
+		}},
+	}
+}
+
+// makeAcceptedForOnly returns a status with Accepted=True for gwA only;
+// gateways not listed here will have no ancestor entry and therefore see
+// Accepted=false.
+func makeAcceptedForOnly(gwA *gwv1.Gateway) policyv1alpha1.OnionBalancePolicyStatus {
+	ns := gwv1.Namespace(gwA.Namespace)
+	kind := gwv1.Kind(GatewayKind)
+	group := gwv1.Group(GatewayAPIGroup)
+	return policyv1alpha1.OnionBalancePolicyStatus{
+		Ancestors: []gwv1.PolicyAncestorStatus{{
+			AncestorRef: gwv1.ParentReference{
+				Group:     &group,
+				Kind:      &kind,
+				Name:      gwv1.ObjectName(gwA.Name),
+				Namespace: &ns,
+			},
+			ControllerName: ControllerName,
+			Conditions: []metav1.Condition{{
+				Type:   string(gwv1.PolicyConditionAccepted),
+				Status: metav1.ConditionTrue,
+				Reason: ReasonOBPAccepted,
+			}},
+		}},
+	}
+}
+
+// --- findEffectiveOnionBalance tests ---
+
+func TestFindEffectiveOnionBalance_LexicalTiebreak(t *testing.T) {
+	gw := sampleGateway()
+	obpZ := obpTargeting(gw, "obp-zebra")
+	obpA := obpTargeting(gw, "obp-alpha")
+	obpA.Status = makeAcceptedFor(gw)
+	obpZ.Status = makeAcceptedFor(gw)
+	cl := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(gw, obpA, obpZ).Build()
+	r := &GatewayReconciler{Client: cl, Scheme: testScheme(t)}
+	got, _, err := r.findEffectiveOnionBalance(context.Background(), gw)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if got == nil || got.Name != "obp-alpha" {
+		t.Errorf("got %v, want obp-alpha", got)
+	}
+}
+
+func TestFindEffectiveOnionBalance_PerAncestorAccepted(t *testing.T) {
+	gwA := sampleGatewayName("gw-a")
+	gwB := sampleGatewayName("gw-b")
+	obp := obpTargetingMany("obp", "gw-a", "gw-b")
+	obp.Status = makeAcceptedForOnly(gwA) // gw-b NOT accepted
+	cl := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(gwA, gwB, obp).Build()
+	r := &GatewayReconciler{Client: cl, Scheme: testScheme(t)}
+	_, accepted, _ := r.findEffectiveOnionBalance(context.Background(), gwB)
+	if accepted {
+		t.Error("gw-b should NOT see Accepted=true; OBP only accepted for gw-a")
+	}
+	_, accepted, _ = r.findEffectiveOnionBalance(context.Background(), gwA)
+	if !accepted {
+		t.Error("gw-a should see Accepted=true")
 	}
 }

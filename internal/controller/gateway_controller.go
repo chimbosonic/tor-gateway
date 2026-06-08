@@ -316,32 +316,49 @@ func (r *GatewayReconciler) findEffectiveClientAuth(
 }
 
 // findEffectiveOnionBalance returns the OBP attached to gw (if any) and
-// whether it is Accepted by this controller. Returns (nil, false, nil) if
-// no OBP targets the Gateway.
+// whether it is Accepted by this controller for the specific Gateway.
+// Returns (nil, false, nil) if no OBP targets the Gateway.
+//
+// When multiple OBPs target the same Gateway, the lexically-first by name
+// wins (deterministic conflict resolution, matching findEffectivePolicy).
+// Accepted is checked only on the ancestor entry whose AncestorRef.Name
+// matches gw.Name, preventing a cross-Gateway OR-aggregation bug.
 func (r *GatewayReconciler) findEffectiveOnionBalance(ctx context.Context, gw *gwv1.Gateway) (*policyv1alpha1.OnionBalancePolicy, bool, error) {
 	var obps policyv1alpha1.OnionBalancePolicyList
 	if err := r.List(ctx, &obps, client.InNamespace(gw.Namespace)); err != nil {
 		return nil, false, fmt.Errorf("list OBPs: %w", err)
 	}
+	var matched *policyv1alpha1.OnionBalancePolicy
 	for i := range obps.Items {
 		p := &obps.Items[i]
 		if !policyTargets(p.Spec.TargetRefs, gw.Name) {
 			continue
 		}
-		accepted := false
-		for _, anc := range p.Status.Ancestors {
-			if string(anc.ControllerName) != string(ControllerName) {
-				continue
-			}
-			for _, c := range anc.Conditions {
-				if c.Type == string(gwv1.PolicyConditionAccepted) && c.Status == metav1.ConditionTrue {
-					accepted = true
-				}
+		if matched == nil || p.Name < matched.Name {
+			matched = p
+		}
+	}
+	if matched == nil {
+		return nil, false, nil
+	}
+	accepted := acceptedForGW(matched, gw.Name)
+	return matched, accepted, nil
+}
+
+// acceptedForGW reports whether the OBP's status has an Accepted=True
+// condition on the ancestor entry whose AncestorRef.Name equals gwName.
+func acceptedForGW(p *policyv1alpha1.OnionBalancePolicy, gwName string) bool {
+	for _, anc := range p.Status.Ancestors {
+		if string(anc.AncestorRef.Name) != gwName {
+			continue
+		}
+		for _, c := range anc.Conditions {
+			if c.Type == string(gwv1.PolicyConditionAccepted) && c.Status == metav1.ConditionTrue {
+				return true
 			}
 		}
-		return p, accepted, nil
 	}
-	return nil, false, nil
+	return false
 }
 
 func (r *GatewayReconciler) ensureKeySecret(
