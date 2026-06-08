@@ -719,9 +719,22 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 	}
 
 	// Mode B pods use the same label selector as Mode A, so the shared
-	// NetworkPolicy guards backend StatefulSet pods too.  Pass nil routes:
-	// Mode B has no HTTPRoutes; only the standard tor-network egress is needed.
-	if err := r.ensureNetworkPolicy(ctx, gw, nil); err != nil {
+	// NetworkPolicy guards backend StatefulSet pods too. Resolve any
+	// HTTPRoutes attached to this Gateway so backend-egress rules are
+	// included (e.g. application Services behind onionbalance).
+	var modeBRoutes []gwv1.HTTPRoute
+	{
+		routeList := &gwv1.HTTPRouteList{}
+		if err := r.List(ctx, routeList); err != nil {
+			return fmt.Errorf("list HTTPRoutes: %w", err)
+		}
+		for i := range routeList.Items {
+			if routeTargetsGateway(&routeList.Items[i], gw) {
+				modeBRoutes = append(modeBRoutes, routeList.Items[i])
+			}
+		}
+	}
+	if err := r.ensureNetworkPolicy(ctx, gw, modeBRoutes); err != nil {
 		return fmt.Errorf("NetworkPolicy: %w", err)
 	}
 
