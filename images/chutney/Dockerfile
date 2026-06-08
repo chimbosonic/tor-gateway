@@ -17,7 +17,7 @@ LABEL org.opencontainers.image.source="https://github.com/chimbosonic/tor-gatewa
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.title="tor-gateway/chutney"
 RUN apt-get update \
- && apt-get install -y --no-install-recommends tor python3 ca-certificates \
+ && apt-get install -y --no-install-recommends tor python3 ca-certificates procps \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd -g 65532 nonroot \
  && useradd -u 65532 -g 65532 -M -s /sbin/nologin nonroot
