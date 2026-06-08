@@ -630,11 +630,7 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 	}
 
 	for i := int32(0); i < pol.Spec.Replicas; i++ {
-		want, err := BuildBackendKeySecret(gw, int(i), nil, r.Scheme)
-		if err != nil {
-			return err
-		}
-		if err := r.ensureBackendKeySecret(ctx, want); err != nil {
+		if err := r.ensureBackendKeySecretForIndex(ctx, gw, int(i)); err != nil {
 			return fmt.Errorf("backend Secret %d: %w", i, err)
 		}
 	}
@@ -782,6 +778,24 @@ func (r *GatewayReconciler) ensureCrossNSMasterRBAC(ctx context.Context, gw *gwv
 		}
 	}
 	return nil
+}
+
+// ensureBackendKeySecretForIndex fetches any pre-existing backend key Secret
+// for idx so that BuildBackendKeySecret can reuse its key material, then
+// upserts the result. This keeps ensureModeB's cyclomatic complexity in check.
+func (r *GatewayReconciler) ensureBackendKeySecretForIndex(ctx context.Context, gw *gwv1.Gateway, idx int) error {
+	existing := &corev1.Secret{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: gw.Namespace, Name: BackendKeySecretName(gw, idx)}, existing); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get: %w", err)
+		}
+		existing = nil
+	}
+	want, err := BuildBackendKeySecret(gw, idx, existing, r.Scheme)
+	if err != nil {
+		return err
+	}
+	return r.ensureBackendKeySecret(ctx, want)
 }
 
 func (r *GatewayReconciler) ensureBackendKeySecret(ctx context.Context, want *corev1.Secret) error {

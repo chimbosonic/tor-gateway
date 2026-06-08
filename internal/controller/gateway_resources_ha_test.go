@@ -11,6 +11,7 @@ You may obtain a copy of the License at
 package controller
 
 import (
+	"bytes"
 	"crypto/rand"
 	"reflect"
 	"slices"
@@ -80,21 +81,18 @@ func TestBuildBackendKeySecret_DataAndHostname(t *testing.T) {
 	scheme := testScheme(t)
 	gw := sampleGateway()
 
-	kp, err := tor.GenerateKeyPair(rand.Reader)
+	s, err := BuildBackendKeySecret(gw, 0, nil, scheme)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := BuildBackendKeySecret(gw, 0, kp, scheme)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range []string{"hs_ed25519_secret_key", "hs_ed25519_public_key", "hostname"} {
+	for _, key := range []string{tor.FileSecretKeyName, tor.FilePublicKeyName, tor.FileHostnameName} {
 		if len(s.Data[key]) == 0 {
 			t.Fatalf("Secret missing populated data[%q]", key)
 		}
 	}
-	if got, want := string(s.Data["hostname"]), kp.OnionAddress().String(); got != want {
-		t.Fatalf("hostname: got %q want %q", got, want)
+	hostname := string(s.Data[tor.FileHostnameName])
+	if !strings.HasSuffix(hostname, ".onion\n") {
+		t.Fatalf("hostname must end with .onion\\n; got %q", hostname)
 	}
 }
 
@@ -128,6 +126,32 @@ func TestBuildBackendKeySecret_GeneratesKeyWhenNil(t *testing.T) {
 	}
 	if len(s.Data["hs_ed25519_secret_key"]) == 0 {
 		t.Fatal("auto-generated key must populate hs_ed25519_secret_key")
+	}
+}
+
+func TestBuildBackendKeySecret_ReusesExistingKeypair(t *testing.T) {
+	gw := sampleGateway()
+	existing := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: BackendKeySecretName(gw, 0), Namespace: gw.Namespace},
+		Data: map[string][]byte{
+			tor.FileSecretKeyName: []byte("OLD-SECRET"),
+			tor.FilePublicKeyName: []byte("OLD-PUBLIC"),
+			tor.FileHostnameName:  []byte("aaaaa.onion\n"),
+		},
+	}
+	s, err := BuildBackendKeySecret(gw, 0, existing, testScheme(t))
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if !bytes.Equal(s.Data[tor.FileSecretKeyName], []byte("OLD-SECRET")) {
+		t.Errorf("expected existing secret reused; got %q", s.Data[tor.FileSecretKeyName])
+	}
+}
+
+func TestBuildBackendKeySecret_HostnameHasTrailingNewline(t *testing.T) {
+	s, _ := BuildBackendKeySecret(sampleGateway(), 0, nil, testScheme(t))
+	if !bytes.HasSuffix(s.Data[tor.FileHostnameName], []byte(".onion\n")) {
+		t.Errorf("hostname must end with .onion\\n to match Mode A; got %q", s.Data[tor.FileHostnameName])
 	}
 }
 

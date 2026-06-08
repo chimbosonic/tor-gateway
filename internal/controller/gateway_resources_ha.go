@@ -70,17 +70,28 @@ func ownerLabels(gw *gwv1.Gateway, role string) map[string]string {
 }
 
 // BuildBackendKeySecret renders a per-pod Secret holding the ed25519 key
-// for backend index idx. data["hostname"] is pre-populated from the key
-// pair so obrefresh's readiness gate (which checks the field is non-empty)
-// fires immediately and so the renderer never depends on a tor-init
-// write-back. The owner-uid label lets the obrefresh informer filter out
-// tenant-planted Secrets carrying the same gateway/role labels.
-func BuildBackendKeySecret(gw *gwv1.Gateway, idx int, kp *tor.KeyPair, scheme *runtime.Scheme) (*corev1.Secret, error) {
-	if kp == nil {
-		var err error
-		kp, err = tor.GenerateKeyPair(rand.Reader)
+// for backend index idx. When existing is non-nil and already contains key
+// material, its data is reused verbatim — this avoids regenerating and
+// discarding a fresh keypair on every reconcile. When existing is nil or
+// empty, a new ed25519 keypair is generated. data["hostname"] is
+// pre-populated from the key pair (with trailing "\n" to match Mode A's
+// on-disk format) so obrefresh's readiness gate fires immediately and the
+// renderer never depends on a tor-init write-back. The owner-uid label lets
+// the obrefresh informer filter out tenant-planted Secrets carrying the same
+// gateway/role labels.
+func BuildBackendKeySecret(gw *gwv1.Gateway, idx int, existing *corev1.Secret, scheme *runtime.Scheme) (*corev1.Secret, error) {
+	var data map[string][]byte
+	if existing != nil && len(existing.Data[tor.FileSecretKeyName]) > 0 {
+		data = existing.Data
+	} else {
+		kp, err := tor.GenerateKeyPair(rand.Reader)
 		if err != nil {
 			return nil, fmt.Errorf("generate backend key: %w", err)
+		}
+		data = map[string][]byte{
+			tor.FileSecretKeyName: kp.SecretKeyFile(),
+			tor.FilePublicKeyName: kp.PublicKeyFile(),
+			tor.FileHostnameName:  kp.Hostname(),
 		}
 	}
 	// Pre-compute the .onion address here: obrefresh's readiness check
@@ -94,11 +105,7 @@ func BuildBackendKeySecret(gw *gwv1.Gateway, idx int, kp *tor.KeyPair, scheme *r
 			Labels:    ownerLabels(gw, haRoleBackend),
 		},
 		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"hs_ed25519_secret_key": kp.SecretKeyFile(),
-			"hs_ed25519_public_key": kp.PublicKeyFile(),
-			"hostname":              []byte(kp.OnionAddress().String()),
-		},
+		Data: data,
 	}
 	if err := controllerutil.SetControllerReference(gw, s, scheme); err != nil {
 		return nil, err
