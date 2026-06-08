@@ -16,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -252,5 +253,23 @@ func TestNetworkPolicySelectsBothModeBPodSets(t *testing.T) {
 	}
 	if _, ok := sel["torgateway.io/role"]; ok {
 		t.Errorf("podSelector must NOT pin role; got %v (frontend + backend pods both need to be covered)", sel)
+	}
+}
+
+func TestNetworkPolicySelectorMatchesModeBPodLabels(t *testing.T) {
+	gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "blog", Namespace: "prod"}}
+	np, err := BuildNetworkPolicy(gw, nil, nil, "", testScheme(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
+	if err != nil {
+		t.Fatalf("LabelSelectorAsSelector: %v", err)
+	}
+	for _, role := range []string{haRoleBackend, haRoleFrontend} {
+		podLabels := HALabels(gw, role)
+		if !sel.Matches(labels.Set(podLabels)) {
+			t.Errorf("Mode B %s pod labels %v not matched by NP selector %v", role, podLabels, sel)
+		}
 	}
 }

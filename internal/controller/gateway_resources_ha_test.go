@@ -466,6 +466,14 @@ func TestHALabels_ContainsGatewayAndRole(t *testing.T) {
 	}
 }
 
+func TestHALabels_IncludesManagedBy(t *testing.T) {
+	gw := sampleGateway()
+	got := HALabels(gw, "backend")
+	if got[managedByLabelKey] != managedByLabelVal {
+		t.Errorf("HALabels missing %s=%s; got %v", managedByLabelKey, managedByLabelVal, got)
+	}
+}
+
 // --- BuildFrontendServiceAccount ---
 
 func TestBuildFrontendServiceAccount(t *testing.T) {

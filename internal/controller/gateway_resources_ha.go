@@ -36,10 +36,11 @@ const (
 )
 
 // HALabels returns the standard Mode B label set for the Gateway. The
-// Gateway-scoping label is shared with Mode A so a single NetworkPolicy
-// covers both modes.
+// managed-by and Gateway-scoping labels are shared with Mode A so a single
+// NetworkPolicy (which selects on ChildLabels) covers both modes.
 func HALabels(gw *gwv1.Gateway, role string) map[string]string {
 	return map[string]string{
+		managedByLabelKey:            managedByLabelVal,
 		"app.kubernetes.io/name":     "tor-gateway",
 		"app.kubernetes.io/instance": gw.Name,
 		gatewayLabelKey:              gw.Name,
