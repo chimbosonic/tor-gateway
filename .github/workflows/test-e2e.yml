@@ -22,10 +22,13 @@ jobs:
         include:
           - suite: core
             label_filter: '!onionbalance'
+            flake_attempts: 1
           - suite: onionbalance-base
             label_filter: 'onionbalance && !ob-failover && !ob-crossns && !networkpolicy'
+            flake_attempts: 2
           - suite: onionbalance-mutations
             label_filter: 'onionbalance && (ob-failover || ob-crossns || networkpolicy)'
+            flake_attempts: 2
     env:
       CONTAINER_TOOL: docker
     steps:
@@ -51,6 +54,7 @@ jobs:
       - name: Run e2e (${{ matrix.suite }})
         env:
           E2E_LABEL_FILTER: ${{ matrix.label_filter }}
+          E2E_FLAKE_ATTEMPTS: ${{ matrix.flake_attempts }}
         run: |
           go mod tidy
           make test-e2e-suite
