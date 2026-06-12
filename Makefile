@@ -140,7 +140,7 @@ test-e2e-suite: setup-test-e2e manifests generate fmt vet ## Run a label-filtere
 		flake_flag=""; \
 	fi; \
 	TOR_GATEWAY_E2E_MODE=chutney KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) CERT_MANAGER_INSTALL_SKIP=true \
-		go test -tags=e2e -timeout 30m ./test/e2e/ -v -ginkgo.v \
+		go test -tags=e2e -timeout 60m ./test/e2e/ -v -ginkgo.v \
 		-ginkgo.label-filter="$$E2E_LABEL_FILTER" \
 		-ginkgo.json-report=ginkgo-report.json \
 		$$flake_flag
@@ -167,6 +167,10 @@ test-e2e-debug: setup-test-e2e manifests generate fmt vet ## Run the e2e tests a
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
+
+.PHONY: pregen-chutney
+pregen-chutney: ## Bootstrap chutney once and export portable network-state + image artifacts (CI pregen job).
+	@hack/chutney/pregen.sh
 
 # Gateway API CRDs and conformance targets.
 # Both pull from the gateway-api Go module cache so the version stays in

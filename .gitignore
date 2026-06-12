@@ -33,6 +33,9 @@ dist/
 *.tar.gz
 *.tgz
 
+# Chutney pregen artifacts (hack/chutney/pregen.sh); nodes tarball covered by *.tar.gz
+/chutney-image.tar
+
 # Helm
 charts/*/charts/
 charts/*.tgz
