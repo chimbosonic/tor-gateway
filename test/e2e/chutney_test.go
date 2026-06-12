@@ -37,42 +37,130 @@ import (
 // one chutney instance per kind cluster, owned by BeforeSuite.
 // These must match hack/chutney/chutney.yaml.
 const (
-	chutneyNamespace = "tor-gateway-chutney"
-	chutneyPodName   = "chutney"
-	chutneyImage     = "ghcr.io/chimbosonic/tor-gateway-chutney:dev"
+	chutneyNamespace      = "tor-gateway-chutney"
+	chutneyPodName        = "chutney"
+	chutneyImage          = "ghcr.io/chimbosonic/tor-gateway-chutney:dev"
 	chutneyConfigMapName  = "tor-gateway-testing-network"
 	chutneyConfigMapKey   = "fragment"
 	chutneyMountPath      = "/etc/tor-gateway/testing-network/fragment"
 	chutneyOperatorNS     = "tor-gateway-system"
 	chutneyOperatorDeploy = "tor-gateway-controller-manager"
-	chutneyReadyTimeout   = 18 * time.Minute
 	chutneyRolloutTimeout = 2 * time.Minute
 )
 
-// DeployChutneyAndExtractFragment is the BeforeSuite-side dispatcher:
-//  1. Build + kind-load the chutney image.
-//  2. Apply the chutney namespace + Pod + Service.
-//  3. Wait for the Pod's readiness probe to pass.
-//  4. Extract the DirAuthority block from inside the pod.
-//  5. Create the tor-gateway-testing-network ConfigMap.
-//  6. Patch the operator Deployment to mount + reference it.
-//
-// Returns the fragment string for callers that want to inspect it.
+const (
+	chutneyFreshBudget = 7 * time.Minute
+	// Polling window for waitChutneyReady only; total warm-start wall clock
+	// also includes injectChutneySeed (pod Running wait + kubectl cp).
+	chutneyWarmReadyBudget = 5 * time.Minute
+	chutneyMaxAttempts     = 3
+)
+
+// DeployChutneyAndExtractFragment is the BeforeSuite-side dispatcher: load
+// (or build) the chutney image, then bootstrap the network with bounded
+// retries — warm-starting from a pregen artifact when CHUTNEY_SEED_TAR is
+// set, falling back to fresh bootstraps with pod recreation between
+// attempts. ginkgo flake-attempts cannot retry BeforeSuite, so this loop is
+// the retry layer matched to bootstrap failures. Returns the DirAuthority
+// fragment for callers that want to inspect it.
 func DeployChutneyAndExtractFragment() string {
-	By("building and kind-loading the chutney image")
-	buildAndLoadImage("image-chutney", chutneyImage)
+	loadChutneyImage()
 
-	By("applying the chutney namespace + Pod + Service")
-	applyYAML(chutneyManifest(false))
+	seedTar := os.Getenv("CHUTNEY_SEED_TAR")
+	for attempt := 1; attempt <= chutneyMaxAttempts; attempt++ {
+		// Warm-start only on the first attempt: if seeded state failed
+		// once, assume the artifact is the problem and bootstrap fresh.
+		useSeed := seedTar != "" && attempt == 1
+		budget := chutneyFreshBudget
+		mode := "fresh bootstrap"
+		if useSeed {
+			budget = chutneyWarmReadyBudget
+			mode = "warm-start (artifact)"
+		}
 
-	By("waiting for the chutney pod to be Ready")
-	Eventually(func() (string, error) {
-		return utils.Run(exec.Command("kubectl", "-n", chutneyNamespace,
+		By(fmt.Sprintf("deploying chutney: %s, attempt %d/%d", mode, attempt, chutneyMaxAttempts))
+		applyYAML(chutneyManifest(useSeed))
+		if useSeed {
+			injectChutneySeed(seedTar)
+		}
+		if waitChutneyReady(budget) {
+			utils.StepSummary("chutney ready: %s, attempt %d/%d", mode, attempt, chutneyMaxAttempts)
+			return finishChutneySetup()
+		}
+		utils.CIWarning("chutney %s attempt %d/%d not Ready within %s; recreating pod",
+			mode, attempt, chutneyMaxAttempts, budget)
+		utils.StepSummary("chutney bootstrap retry: %s attempt %d/%d timed out", mode, attempt, chutneyMaxAttempts)
+		if attempt < chutneyMaxAttempts {
+			// Recreate only when another attempt follows — the final
+			// failure leaves the pod for CI's diagnostics collection.
+			_, _ = utils.Run(exec.Command("kubectl", "-n", chutneyNamespace, "delete", "pod",
+				chutneyPodName, "--force", "--grace-period=0", "--ignore-not-found"))
+			// Pod specs are immutable (env differs between warm and fresh), so
+			// the next apply must not race a still-terminating pod.
+			if _, err := utils.Run(exec.Command("kubectl", "-n", chutneyNamespace, "wait",
+				"--for=delete", "pod/"+chutneyPodName, "--timeout=120s")); err != nil {
+				utils.CIWarning("chutney pod did not finish terminating before next attempt: %v", err)
+			}
+		}
+	}
+	Fail(fmt.Sprintf("chutney never became Ready after %d attempts", chutneyMaxAttempts))
+	return "" // unreachable
+}
+
+// waitChutneyReady polls the Ready condition for up to budget. Returns false
+// on timeout instead of failing, so the caller can retry.
+func waitChutneyReady(budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		out, _ := utils.Run(exec.Command("kubectl", "-n", chutneyNamespace,
 			"get", "pod", chutneyPodName,
 			"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}"))
-	}, chutneyReadyTimeout, "5s").Should(Equal("True"),
-		"chutney pod never became Ready (./chutney verify did not return 0)")
+		if strings.TrimSpace(out) == "True" {
+			return true
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return false
+}
 
+// loadChutneyImage prefers a pre-built image artifact (byte-identical to the
+// one the pregen state was generated with); otherwise builds locally.
+func loadChutneyImage() {
+	if imgTar := os.Getenv("CHUTNEY_IMAGE_TAR"); imgTar != "" {
+		By("loading the pre-built chutney image from artifact")
+		_, err := utils.Run(exec.Command("docker", "load", "-i", imgTar))
+		Expect(err).NotTo(HaveOccurred(), "docker load chutney image artifact")
+		Expect(utils.LoadImageToKindClusterWithName(chutneyImage)).To(Succeed(),
+			"kind-load chutney image from artifact")
+		return
+	}
+	By("building and kind-loading the chutney image")
+	buildAndLoadImage("image-chutney", chutneyImage)
+}
+
+// injectChutneySeed copies the pregen state tarball into the running pod and
+// touches the marker the entrypoint waits for.
+func injectChutneySeed(seedTar string) {
+	By("injecting pre-generated chutney network state")
+	Eventually(func() string {
+		out, _ := utils.Run(exec.Command("kubectl", "-n", chutneyNamespace,
+			"get", "pod", chutneyPodName, "-o", "jsonpath={.status.phase}"))
+		return strings.TrimSpace(out)
+	}, "2m", "2s").Should(Equal("Running"), "chutney pod must be Running to receive the seed")
+	_, err := utils.Run(exec.Command("kubectl", "-n", chutneyNamespace,
+		"exec", chutneyPodName, "--", "mkdir", "-p", "/data/seed"))
+	Expect(err).NotTo(HaveOccurred(), "mkdir /data/seed")
+	_, err = utils.Run(exec.Command("kubectl", "-n", chutneyNamespace,
+		"cp", seedTar, chutneyPodName+":/data/seed/nodes.tar.gz"))
+	Expect(err).NotTo(HaveOccurred(), "kubectl cp seed tarball")
+	_, err = utils.Run(exec.Command("kubectl", "-n", chutneyNamespace,
+		"exec", chutneyPodName, "--", "touch", "/data/seed/ready"))
+	Expect(err).NotTo(HaveOccurred(), "touch seed-ready marker")
+}
+
+// finishChutneySetup is the post-Ready tail: extract the DirAuthority
+// fragment, create the ConfigMap, patch + roll the operator.
+func finishChutneySetup() string {
 	By("extracting the DirAuthority block from the chutney pod")
 	fragment := mustExtractChutneyFragment()
 
@@ -176,6 +264,8 @@ func chutneyManifest(waitSeed bool) string {
 	Expect(err).NotTo(HaveOccurred(), "resolve project dir")
 	raw, err := os.ReadFile(filepath.Join(projectDir, "hack", "chutney", "chutney.yaml"))
 	Expect(err).NotTo(HaveOccurred(), "read hack/chutney/chutney.yaml")
+	Expect(string(raw)).To(ContainSubstring("__CHUTNEY_WAIT_SEED__"),
+		"hack/chutney/chutney.yaml lost the __CHUTNEY_WAIT_SEED__ token")
 	v := "0"
 	if waitSeed {
 		v = "1"
