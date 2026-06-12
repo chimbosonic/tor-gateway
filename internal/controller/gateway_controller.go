@@ -1111,9 +1111,12 @@ func (r *GatewayReconciler) cleanupModeAResources(ctx context.Context, gw *gwv1.
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: KeySecretName(gw.Name)}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: TorrcConfigMapName(gw.Name)}},
 		&netv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: NetworkPolicyName(gw.Name)}},
-		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: RouterRBACName(gw.Name)}},
-		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: RouterRBACName(gw.Name)}},
-		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: RouterRBACName(gw.Name)}},
+		// The router SA/Role/RoleBinding (RouterRBACName) are deliberately
+		// absent: Mode B backend pods run as the router ServiceAccount, and
+		// this cleanup runs on every Mode B reconcile — deleting the SA here
+		// churns it and invalidates the pods' projected tokens. All three
+		// carry a controller ownerReference to the Gateway, so deletion GC
+		// covers them.
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: VanityRBACName(gw.Name)}},
 		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: VanityRBACName(gw.Name)}},
 		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: gw.Namespace, Name: VanityRBACName(gw.Name)}},

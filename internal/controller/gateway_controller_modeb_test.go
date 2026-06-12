@@ -777,3 +777,59 @@ func TestEnsureModeB_NoNetworkPolicyWhenDisabled(t *testing.T) {
 		t.Fatalf("unexpected error checking for NetworkPolicy: %v", err)
 	}
 }
+
+// TestModeBReconcile_PreservesSharedRouterRBAC runs the exact sequence the
+// controller executes every reconcile when an accepted OnionBalancePolicy
+// targets the Gateway (cleanupModeAResources then ensureModeB) against router
+// SA/Role/RoleBinding left by a prior reconcile. Mode B backend pods run as
+// the router ServiceAccount, so the trio must survive in place: a
+// delete+recreate cycle would invalidate the pods' projected SA tokens and
+// tor-init's per-pod key fetch would get 401s. The marker annotation
+// distinguishes "kept" from "deleted and recreated" — CreateOrUpdate
+// preserves annotations it does not manage, deletion does not.
+func TestModeBReconcile_PreservesSharedRouterRBAC(t *testing.T) {
+	ctx := context.Background()
+	gw := sampleGateway()
+	obp := samplePolicy(2)
+	masterSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "master-keys", Namespace: gw.Namespace},
+		Data:       validMasterSecretData(t),
+	}
+	const marker = "torgateway.io/test-prior-reconcile"
+	prior := metav1.ObjectMeta{
+		Name:        RouterRBACName(gw.Name),
+		Namespace:   gw.Namespace,
+		Annotations: map[string]string{marker: "true"},
+	}
+	routerSA := &corev1.ServiceAccount{ObjectMeta: *prior.DeepCopy()}
+	routerRole := &rbacv1.Role{ObjectMeta: *prior.DeepCopy()}
+	routerRB := &rbacv1.RoleBinding{ObjectMeta: *prior.DeepCopy()}
+
+	sc := testScheme(t)
+	cl := fake.NewClientBuilder().WithScheme(sc).WithStatusSubresource(gw).
+		WithObjects(gw, obp, masterSecret, routerSA, routerRole, routerRB).Build()
+	r := &GatewayReconciler{Client: cl, Scheme: sc, Images: sampleImages()}
+
+	if err := r.cleanupModeAResources(ctx, gw); err != nil {
+		t.Fatalf("cleanupModeAResources: %v", err)
+	}
+	if err := r.ensureModeB(ctx, gw, obp); err != nil {
+		t.Fatalf("ensureModeB: %v", err)
+	}
+
+	nn := types.NamespacedName{Namespace: gw.Namespace, Name: RouterRBACName(gw.Name)}
+	for name, obj := range map[string]client.Object{
+		"ServiceAccount": &corev1.ServiceAccount{},
+		"Role":           &rbacv1.Role{},
+		"RoleBinding":    &rbacv1.RoleBinding{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := cl.Get(ctx, nn, obj); err != nil {
+				t.Fatalf("router %s missing after Mode B reconcile: %v", name, err)
+			}
+			if obj.GetAnnotations()[marker] != "true" {
+				t.Fatalf("router %s was deleted and recreated during Mode B reconcile (marker annotation lost)", name)
+			}
+		})
+	}
+}

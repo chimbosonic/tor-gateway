@@ -26,6 +26,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+// TestCleanupModeAResources_DeletesAllChildren verifies that the Mode A→B
+// transition GCs every Mode-A-only child, while keeping the router
+// SA/Role/RoleBinding: those are shared with Mode B (backend pods run as the
+// router SA) and Gateway deletion GCs them via their controller
+// ownerReference (asserted in the Build* tests in gateway_resources_test.go).
 func TestCleanupModeAResources_DeletesAllChildren(t *testing.T) {
 	ctx := context.Background()
 	gw := sampleGateway()
@@ -80,14 +85,21 @@ func TestCleanupModeAResources_DeletesAllChildren(t *testing.T) {
 	t.Run("NetworkPolicy", func(t *testing.T) {
 		assertGone(t, "NetworkPolicy", types.NamespacedName{Namespace: ns, Name: NetworkPolicyName(gw.Name)}, &netv1.NetworkPolicy{})
 	})
-	t.Run("RouterServiceAccount", func(t *testing.T) {
-		assertGone(t, "RouterServiceAccount", types.NamespacedName{Namespace: ns, Name: RouterRBACName(gw.Name)}, &corev1.ServiceAccount{})
+	assertKept := func(t *testing.T, name string, nn types.NamespacedName, obj client.Object) {
+		t.Helper()
+		if err := cl.Get(ctx, nn, obj); err != nil {
+			t.Fatalf("%s: shared router RBAC must survive cleanup, got %v", name, err)
+		}
+	}
+
+	t.Run("RouterServiceAccountKept", func(t *testing.T) {
+		assertKept(t, "RouterServiceAccount", types.NamespacedName{Namespace: ns, Name: RouterRBACName(gw.Name)}, &corev1.ServiceAccount{})
 	})
-	t.Run("RouterRole", func(t *testing.T) {
-		assertGone(t, "RouterRole", types.NamespacedName{Namespace: ns, Name: RouterRBACName(gw.Name)}, &rbacv1.Role{})
+	t.Run("RouterRoleKept", func(t *testing.T) {
+		assertKept(t, "RouterRole", types.NamespacedName{Namespace: ns, Name: RouterRBACName(gw.Name)}, &rbacv1.Role{})
 	})
-	t.Run("RouterRoleBinding", func(t *testing.T) {
-		assertGone(t, "RouterRoleBinding", types.NamespacedName{Namespace: ns, Name: RouterRBACName(gw.Name)}, &rbacv1.RoleBinding{})
+	t.Run("RouterRoleBindingKept", func(t *testing.T) {
+		assertKept(t, "RouterRoleBinding", types.NamespacedName{Namespace: ns, Name: RouterRBACName(gw.Name)}, &rbacv1.RoleBinding{})
 	})
 	t.Run("VanityServiceAccount", func(t *testing.T) {
 		assertGone(t, "VanityServiceAccount", types.NamespacedName{Namespace: ns, Name: VanityRBACName(gw.Name)}, &corev1.ServiceAccount{})
