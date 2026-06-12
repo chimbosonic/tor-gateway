@@ -1,7 +1,7 @@
 # Stable E2E Pipeline — Design
 
 **Date:** 2026-06-08
-**Status:** Design approved; ready for plan.
+**Status:** Shipped (waves 1-4). Partially superseded by `2026-06-12-e2e-pregen-retry-design.md` (retry posture, chutney pre-gen, spec relocation).
 
 ## Problem
 
