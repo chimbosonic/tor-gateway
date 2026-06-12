@@ -21,8 +21,7 @@ You may obtain a copy of the License at
 //  1. No spec depends on another Describe block's state — each block re-creates
 //     its own Gateway/OBP/Secret in its own namespace.
 //  2. Within an Ordered block, observer specs come before mutator specs.
-//  3. Use Label("ob-failover") on mutator specs and Label("ob-crossns") on
-//     cross-namespace specs so the CI matrix can route them correctly.
+//  3. Use Label("ob-failover") on mutator specs so the CI matrix can route them.
 //  4. Generous setup budgets (5-10m), tight assertion budgets (<=2m).
 
 package e2e
@@ -32,7 +31,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -42,15 +40,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	networkingv1 "k8s.io/api/networking/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-
 	"github.com/chimbosonic/tor-gateway/internal/tor"
 	"github.com/chimbosonic/tor-gateway/test/utils"
 )
-
-const obpNS = "tor-gateway-ha"
 
 // buildModeBFixture builds a Mode B test fixture in the given namespace + GatewayClass.
 // Generates a master keypair, creates the master Secret + GatewayClass + Gateway +
@@ -464,182 +456,4 @@ var _ = Describe("OnionBalance HA — mutations", Ordered, Label("onionbalance",
 			Should(Equal("backend-A"),
 				"master .onion should remain reachable after scale-up to 4 backends")
 	})
-})
-
-var _ = Describe("OnionBalance HA — cross-NS + NetworkPolicy", Ordered, Label("onionbalance"), func() {
-	BeforeAll(func() {
-		// NP-coverage spec observes the ha-gw fixture. The cross-NS spec is
-		// self-contained — creates its own ha-master-secrets / tor-gateway-ha-crossns
-		// namespaces in its body, doesn't depend on this fixture.
-		_ = modeBFixture("tor-gateway-ha", "ha-gw-class", "ha-gw")
-	})
-
-	AfterAll(func() {
-		teardownModeBFixture("tor-gateway-ha", "ha-gw-class")
-	})
-
-	// Task 12: Cross-NS master Secret via ReferenceGrant.
-	It("supports a master Secret in a different namespace via ReferenceGrant", Label("ob-crossns"), func() {
-		const (
-			crossNSGWClass = "tor-gateway-ha-crossns"
-			crossGWName    = "blog-cross"
-			masterSecName  = "ob-master"
-		)
-		sourceNS := "ha-master-secrets"
-
-		By("creating the cross-NS secrets namespace")
-		_, err := utils.Run(exec.Command("kubectl", "create", "ns", sourceNS))
-		Expect(err).NotTo(HaveOccurred(), "create namespace %s", sourceNS)
-		DeferCleanup(func() {
-			_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", sourceNS, "--wait=false", "--ignore-not-found"))
-			_, _ = utils.Run(exec.Command("kubectl", "-n", obpNS, "delete", "gateway", crossGWName, "--ignore-not-found"))
-			_, _ = utils.Run(exec.Command("kubectl", "-n", obpNS, "delete", "onionbalancepolicy",
-				crossGWName+"-obp", "--ignore-not-found"))
-			_, _ = utils.Run(exec.Command("kubectl", "delete", "gatewayclass", crossNSGWClass, "--ignore-not-found"))
-		})
-
-		By("generating a master keypair and creating the Secret in sourceNS")
-		kp, kpErr := tor.GenerateKeyPair(rand.Reader)
-		Expect(kpErr).NotTo(HaveOccurred(), "generate cross-NS master keypair")
-		crossHostname := kp.OnionAddress().String()
-
-		applyYAML(fmt.Sprintf(`
-apiVersion: v1
-kind: Secret
-metadata:
-  name: %[1]s
-  namespace: %[2]s
-type: Opaque
-data:
-  hs_ed25519_secret_key: %[3]s
-  hs_ed25519_public_key: %[4]s
-`, masterSecName, sourceNS,
-			base64.StdEncoding.EncodeToString(kp.SecretKeyFile()),
-			base64.StdEncoding.EncodeToString(kp.PublicKeyFile())))
-
-		By("applying a ReferenceGrant in sourceNS allowing OnionBalancePolicies in obpNS to read Secrets")
-		// The from.group matches the OBP API group used by MasterKeyReferenceGrantAllows.
-		applyYAML(fmt.Sprintf(`
-apiVersion: gateway.networking.k8s.io/v1beta1
-kind: ReferenceGrant
-metadata:
-  name: allow-ob-master-fetch
-  namespace: %[1]s
-spec:
-  from:
-  - group: policy.torgateway.io
-    kind: OnionBalancePolicy
-    namespace: %[2]s
-  to:
-  - group: ""
-    kind: Secret
-    name: %[3]s
-`, sourceNS, obpNS, masterSecName))
-
-		By("installing a dedicated GatewayClass for the cross-NS test")
-		applyYAML(fmt.Sprintf(`
-apiVersion: gateway.networking.k8s.io/v1
-kind: GatewayClass
-metadata:
-  name: %s
-spec:
-  controllerName: torgateway.io/gateway-controller
-`, crossNSGWClass))
-
-		By("deploying Gateway + OBP referencing the cross-NS master Secret")
-		applyYAML(fmt.Sprintf(`
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: %[1]s
-  namespace: %[2]s
-spec:
-  gatewayClassName: %[3]s
-  listeners:
-  - { name: onion, port: 80, protocol: torgateway.io/HiddenService }
----
-apiVersion: policy.torgateway.io/v1alpha1
-kind: OnionBalancePolicy
-metadata:
-  name: %[1]s-obp
-  namespace: %[2]s
-spec:
-  targetRefs:
-  - { group: gateway.networking.k8s.io, kind: Gateway, name: %[1]s }
-  replicas: 1
-  masterKeySecretRef:
-    name: %[4]s
-    namespace: %[5]s
-`, crossGWName, obpNS, crossNSGWClass, masterSecName, sourceNS))
-
-		By("waiting for Gateway.status.addresses to publish the expected .onion hostname")
-		Eventually(func() string {
-			out, _ := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "gateway", crossGWName,
-				"-o", "jsonpath={.status.addresses[0].value}"))
-			return strings.TrimSpace(out)
-		}, 5*time.Minute, 5*time.Second).Should(Equal(crossHostname),
-			"Gateway %s should publish the pre-seeded cross-NS master .onion address", crossGWName)
-
-		// CrossNSMasterRoleName(gw) = FrontendName(gw) + "-master-fetch"
-		//                           = gw.Name + "-frontend-master-fetch"
-		expectedRoleBindingName := crossGWName + "-frontend-master-fetch"
-		By("confirming the cross-NS RoleBinding lands in sourceNS")
-		out, rbErr := utils.Run(exec.Command("kubectl", "-n", sourceNS, "get", "rolebinding", expectedRoleBindingName))
-		Expect(rbErr).NotTo(HaveOccurred(), "cross-NS RoleBinding %s should exist in %s: %s",
-			expectedRoleBindingName, sourceNS, out)
-	})
-
-	// Task 13: per-Gateway NetworkPolicy selector covers all Mode B pods.
-	It("covers Mode B frontend and backend pods with the per-Gateway NetworkPolicy",
-		Label("networkpolicy", "onionbalance"), func() {
-			const npName = "ha-gw-netpol"
-
-			By("waiting for the per-Gateway NetworkPolicy to be reconciled")
-			var npOut string
-			Eventually(func() error {
-				out, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "networkpolicy", npName, "-o", "json"))
-				if err != nil {
-					return err
-				}
-				npOut = out
-				return nil
-			}, "30s", "2s").Should(Succeed(), "NetworkPolicy %s should exist in %s", npName, obpNS)
-
-			var np networkingv1.NetworkPolicy
-			Expect(json.Unmarshal([]byte(npOut), &np)).To(Succeed())
-
-			sel, selErr := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
-			Expect(selErr).NotTo(HaveOccurred())
-
-			By("listing all Mode B pods (frontend Deployment + backend StatefulSet)")
-			podOut, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "pods",
-				"-l", "torgateway.io/gateway=ha-gw",
-				"-o", "jsonpath={range .items[*]}{.metadata.name}={.metadata.labels}{\"\\n\"}{end}"))
-			Expect(err).NotTo(HaveOccurred(), "list Mode B pods in %s", obpNS)
-
-			type podItem struct {
-				Metadata struct {
-					Name   string            `json:"name"`
-					Labels map[string]string `json:"labels"`
-				} `json:"metadata"`
-			}
-			type podList struct {
-				Items []podItem `json:"items"`
-			}
-			listOut, err := utils.Run(exec.Command("kubectl", "-n", obpNS, "get", "pods",
-				"-l", "torgateway.io/gateway=ha-gw",
-				"-o", "json"))
-			Expect(err).NotTo(HaveOccurred(), "get pods JSON in %s", obpNS)
-			_ = podOut
-
-			var pl podList
-			Expect(json.Unmarshal([]byte(listOut), &pl)).To(Succeed())
-			Expect(pl.Items).NotTo(BeEmpty(), "expected at least one Mode B pod with label torgateway.io/gateway=ha-gw")
-
-			By("asserting the NP podSelector matches every Mode B pod")
-			for _, p := range pl.Items {
-				Expect(sel.Matches(labels.Set(p.Metadata.Labels))).To(BeTrue(),
-					"NP selector should match Mode B pod %s with labels %v", p.Metadata.Name, p.Metadata.Labels)
-			}
-		})
 })

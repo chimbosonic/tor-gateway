@@ -147,6 +147,67 @@ func TestEnsureModeB_CreatesCrossNSRoleBinding(t *testing.T) {
 	}
 }
 
+// TestEnsureModeB_CrossNSMasterOnionPublishedInStatus covers the assertion
+// relocated from the e2e cross-NS spec: with a ReferenceGrant in place, the
+// master .onion derived from a Secret in ANOTHER namespace ends up in
+// Gateway.status.addresses. (RBAC enforcement of the frontend pod's cross-NS
+// GET is live-only and deliberately not covered here — see the 2026-06-12
+// e2e-pregen-retry design spec, "accepted gap".)
+func TestEnsureModeB_CrossNSMasterOnionPublishedInStatus(t *testing.T) {
+	ctx := context.Background()
+	gw := sampleGateway()
+	obp := samplePolicy(1)
+	obp.Spec.MasterKeySecretRef.Namespace = testMasterSecretNS
+	obp.Spec.MasterKeySecretRef.Name = testMasterSecretName
+
+	kp, err := tor.GenerateKeyPair(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	masterSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: testMasterSecretName, Namespace: testMasterSecretNS},
+		Data: map[string][]byte{
+			tor.FileSecretKeyName: kp.SecretKeyFile(),
+			tor.FilePublicKeyName: kp.PublicKeyFile(),
+		},
+	}
+	rg := &gwv1beta1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "allow-blog", Namespace: testMasterSecretNS},
+		Spec: gwv1beta1.ReferenceGrantSpec{
+			From: []gwv1beta1.ReferenceGrantFrom{{
+				Group:     "policy.torgateway.io",
+				Kind:      "OnionBalancePolicy",
+				Namespace: gwv1beta1.Namespace(gw.Namespace),
+			}},
+			To: []gwv1beta1.ReferenceGrantTo{{Group: "", Kind: "Secret"}},
+		},
+	}
+	sc := testSchemeWithGrants(t)
+	cl := fake.NewClientBuilder().
+		WithScheme(sc).
+		WithRESTMapper(testRESTMapper()).
+		WithStatusSubresource(gw).
+		WithObjects(gw, obp, masterSecret, rg).
+		Build()
+	r := &GatewayReconciler{Client: cl, Scheme: sc, Images: sampleImages()}
+	if err := r.ensureModeB(ctx, gw, obp); err != nil {
+		t.Fatalf("ensureModeB: %v", err)
+	}
+
+	var got gwv1.Gateway
+	if err := cl.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &got); err != nil {
+		t.Fatalf("get gateway: %v", err)
+	}
+	want := kp.OnionAddress().String()
+	for _, a := range got.Status.Addresses {
+		if a.Value == want {
+			return
+		}
+	}
+	t.Errorf("status.addresses = %v, want to contain %s (onion derived from the cross-NS master Secret)",
+		got.Status.Addresses, want)
+}
+
 func TestCleanupModeBResources_DeletesOnionbalanceConfigMap(t *testing.T) {
 	ctx := context.Background()
 	gw := sampleGateway()
