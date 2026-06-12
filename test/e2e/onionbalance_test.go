@@ -52,12 +52,12 @@ import (
 
 const obpNS = "tor-gateway-ha"
 
-// modeBFixture builds a Mode B test fixture in the given namespace + GatewayClass.
+// buildModeBFixture builds a Mode B test fixture in the given namespace + GatewayClass.
 // Generates a master keypair, creates the master Secret + GatewayClass + Gateway +
 // OBP + HTTPRoute + 2 echo backends, waits for the frontend Deployment Available,
 // waits for Gateway.status.addresses to publish the .onion, applies a tor-client
 // pod, and returns the master .onion address for use in specs.
-func modeBFixture(ns, gwClass, gwName string) (masterOnion string) {
+func buildModeBFixture(ns, gwClass, gwName string) (masterOnion string) {
 	masterSecretName := gwName + "-master-secret"
 	obpName := gwName + "-obp"
 	routeName := gwName + "-route"
@@ -212,19 +212,66 @@ spec:
 		"wait", "--for=condition=Ready", "pod/"+torClientPod, "--timeout=120s"))
 	Expect(err).NotTo(HaveOccurred(), "%s pod not ready", torClientPod)
 
-	By("warming up the Tor circuit to the master .onion (absorbs HSDir propagation latency)")
-	// This wait pulls the propagation cost out of every spec — once it succeeds,
-	// fetchOverTor calls inside specs can use tight budgets (30s-1m). A failure
-	// here is reported as a BeforeAll error, not a spec flake.
-	Eventually(func() string {
-		out, _ := utils.Run(exec.Command("kubectl", "-n", ns, "exec", torClientPod, "-c", "curl", "--",
-			"curl", "-s", "--max-time", "30", "--socks5-hostname", "127.0.0.1:9050",
-			"http://"+masterOnion+"/"))
-		return strings.TrimSpace(out)
-	}, "10m", "10s").Should(Or(Equal("backend-A"), Equal("backend-B")),
-		"warmup: tor-client should reach the master .onion within 10m")
-
 	return masterOnion
+}
+
+// warmUpMasterOnion polls the master .onion until it serves a backend
+// response. This wait pulls the HSDir propagation cost out of every spec —
+// once it succeeds, fetchOverTor calls inside specs can use tight budgets
+// (30s-1m). Error-returning (not Expect-failing) so the caller can rebuild
+// the fixture and retry — a ginkgo BeforeAll failure is otherwise terminal.
+func warmUpMasterOnion(ns, pod, onion string, budget time.Duration) error {
+	deadline := time.Now().Add(budget)
+	var last string
+	for time.Now().Before(deadline) {
+		out, _ := utils.Run(exec.Command("kubectl", "-n", ns, "exec", pod, "-c", "curl", "--",
+			"curl", "-s", "--max-time", "30", "--socks5-hostname", "127.0.0.1:9050",
+			"http://"+onion+"/"))
+		last = strings.TrimSpace(out)
+		if last == "backend-A" || last == "backend-B" {
+			return nil
+		}
+		time.Sleep(10 * time.Second)
+	}
+	return fmt.Errorf("master .onion not reachable within %s (last output %q)", budget, last)
+}
+
+// modeBFixture builds the fixture and warms the master .onion circuit,
+// rebuilding the whole fixture once (fresh namespace, fresh keys) if the
+// warmup times out. (With TOR_GATEWAY_E2E_NO_TEARDOWN=1 the rebuild path
+// can't reclaim the namespace — that env is a local debug knob only.)
+func modeBFixture(ns, gwClass, gwName string) string {
+	const warmupBudget = 10 * time.Minute
+	torClientPod := gwName + "-tor-client"
+
+	masterOnion := buildModeBFixture(ns, gwClass, gwName)
+	By("warming up the Tor circuit to the master .onion (absorbs HSDir propagation latency)")
+	err := warmUpMasterOnion(ns, torClientPod, masterOnion, warmupBudget)
+	if err == nil {
+		return masterOnion
+	}
+
+	utils.CIWarning("mode B fixture warmup failed in %s; rebuilding fixture once: %v", ns, err)
+	utils.StepSummary("fixture rebuild: %s (warmup timeout)", ns)
+	teardownModeBFixture(ns, gwClass)
+	waitForNamespaceGone(ns)
+
+	masterOnion = buildModeBFixture(ns, gwClass, gwName)
+	By("warming up the Tor circuit after fixture rebuild")
+	err = warmUpMasterOnion(ns, torClientPod, masterOnion, warmupBudget)
+	Expect(err).NotTo(HaveOccurred(), "mode B fixture warmup failed again after rebuild")
+	utils.StepSummary("fixture ready after rebuild: %s", ns)
+	return masterOnion
+}
+
+// waitForNamespaceGone blocks until the namespace finishes deleting
+// (teardownModeBFixture deletes with --wait=false).
+func waitForNamespaceGone(ns string) {
+	Eventually(func() string {
+		out, _ := utils.Run(exec.Command("kubectl", "get", "ns", ns,
+			"-o", "jsonpath={.metadata.name}", "--ignore-not-found"))
+		return strings.TrimSpace(out)
+	}, "3m", "5s").Should(BeEmpty(), "namespace %s should finish deleting before rebuild", ns)
 }
 
 // teardownModeBFixture removes everything modeBFixture created.
