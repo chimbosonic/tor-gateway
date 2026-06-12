@@ -14,10 +14,10 @@
 # timeout, the pod went to Error/restartPolicy:Never, and Tor died.
 set -eu
 : "${POD_IP:?POD_IP env var required (use downward API)}"
-export CHUTNEY_LISTEN_ADDRESS="${POD_IP}"
+# Advertise the pinned Service VIP (cluster-portable) when set; fall back
+# to POD_IP so the image keeps working outside the e2e harness.
+export CHUTNEY_LISTEN_ADDRESS="${CHUTNEY_ADVERTISE_IP:-$POD_IP}"
 ./chutney configure networks/k8s-mini
 ./chutney start networks/k8s-mini
-# wait_for_bootstrap may exit non-zero on a busy node — fall through
-# regardless and let the readiness probe gate readiness.
 ./chutney wait_for_bootstrap networks/k8s-mini || true
 exec tail -f /dev/null

@@ -21,7 +21,9 @@ package e2e
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -61,7 +63,7 @@ func DeployChutneyAndExtractFragment() string {
 	buildAndLoadImage("image-chutney", chutneyImage)
 
 	By("applying the chutney namespace + Pod + Service")
-	applyYAML(chutneyManifest())
+	applyYAML(chutneyManifest(false))
 
 	By("waiting for the chutney pod to be Ready")
 	Eventually(func() (string, error) {
@@ -167,68 +169,18 @@ func patchOperatorForChutney() {
 	Expect(err).NotTo(HaveOccurred(), "operator volume patch failed")
 }
 
-func chutneyManifest() string {
-	return `
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: ` + chutneyNamespace + `
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ` + chutneyServiceName + `
-  namespace: ` + chutneyNamespace + `
-spec:
-  selector: { app: chutney }
-  ports:
-  - { name: dir-0, port: 7000, targetPort: 7000 }
-  - { name: dir-1, port: 7001, targetPort: 7001 }
-  - { name: dir-2, port: 7002, targetPort: 7002 }
----
-apiVersion: v1
-kind: Pod
-metadata:
-  name: ` + chutneyPodName + `
-  namespace: ` + chutneyNamespace + `
-  labels: { app: chutney }
-spec:
-  restartPolicy: OnFailure
-  securityContext:
-    runAsNonRoot: true
-    runAsUser: 65532
-    runAsGroup: 65532
-    fsGroup: 65532
-  containers:
-  - name: chutney
-    image: ` + chutneyImage + `
-    imagePullPolicy: Never
-    env:
-    - name: POD_IP
-      valueFrom:
-        fieldRef:
-          fieldPath: status.podIP
-    volumeMounts:
-    - { name: data, mountPath: /data }
-    readinessProbe:
-      exec:
-        command: ["./chutney", "verify", "networks/k8s-mini"]
-      initialDelaySeconds: 60
-      periodSeconds: 15
-      timeoutSeconds: 60  # was: 20 — too tight for cold CI; verify needs longer when network is bootstrapping
-      failureThreshold: 30
-    livenessProbe:
-      exec:
-        command: ["pgrep", "tor"]
-      initialDelaySeconds: 600
-      periodSeconds: 60
-      failureThreshold: 5
-    resources:
-      requests: { cpu: "750m", memory: "1.5Gi" }
-      limits:   { cpu: "1750m", memory: "3Gi" }
-  volumes:
-  - { name: data, emptyDir: {} }
-`
+// chutneyManifest loads hack/chutney/chutney.yaml (shared with
+// hack/chutney/pregen.sh) and substitutes the seed-mode token.
+func chutneyManifest(waitSeed bool) string {
+	projectDir, err := utils.GetProjectDir()
+	Expect(err).NotTo(HaveOccurred(), "resolve project dir")
+	raw, err := os.ReadFile(filepath.Join(projectDir, "hack", "chutney", "chutney.yaml"))
+	Expect(err).NotTo(HaveOccurred(), "read hack/chutney/chutney.yaml")
+	v := "0"
+	if waitSeed {
+		v = "1"
+	}
+	return strings.ReplaceAll(string(raw), "__CHUTNEY_WAIT_SEED__", v)
 }
 
 func testingNetworkConfigMap(ns, fragment string) string {

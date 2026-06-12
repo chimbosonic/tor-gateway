@@ -1,0 +1,85 @@
+# Single source of truth for the e2e chutney deployment.
+# Consumed by test/e2e/chutney_test.go (token-substituted in Go) and
+# hack/chutney/pregen.sh (token-substituted with sed).
+# clusterIP is pinned so relays can advertise a cluster-independent address:
+# bootstrapped network state under /data/nodes then works in ANY kind cluster
+# (kind's service CIDR 10.96.0.0/12 is identical everywhere), which is what
+# makes the pre-gen artifact portable. 10.96.77.77 is far from the range
+# kube allocates sequentially from, so collision is implausible.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tor-gateway-chutney
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chutney-network
+  namespace: tor-gateway-chutney
+spec:
+  clusterIP: 10.96.77.77
+  # The pod's readiness probe is `chutney verify`, which cannot pass until
+  # the relays reach each other THROUGH this Service — without this flag the
+  # unready pod has no endpoints and bootstrap deadlocks.
+  publishNotReadyAddresses: true
+  selector: { app: chutney }
+  ports:
+  - { name: or-5000, port: 5000, targetPort: 5000 }
+  - { name: or-5001, port: 5001, targetPort: 5001 }
+  - { name: or-5002, port: 5002, targetPort: 5002 }
+  - { name: or-5003, port: 5003, targetPort: 5003 }
+  - { name: or-5004, port: 5004, targetPort: 5004 }
+  - { name: or-5005, port: 5005, targetPort: 5005 }
+  - { name: dir-7000, port: 7000, targetPort: 7000 }
+  - { name: dir-7001, port: 7001, targetPort: 7001 }
+  - { name: dir-7002, port: 7002, targetPort: 7002 }
+  - { name: dir-7003, port: 7003, targetPort: 7003 }
+  - { name: dir-7004, port: 7004, targetPort: 7004 }
+  - { name: dir-7005, port: 7005, targetPort: 7005 }
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: chutney
+  namespace: tor-gateway-chutney
+  labels: { app: chutney }
+spec:
+  restartPolicy: OnFailure
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+  containers:
+  - name: chutney
+    image: ghcr.io/chimbosonic/tor-gateway-chutney:dev
+    imagePullPolicy: Never
+    env:
+    - name: POD_IP
+      valueFrom:
+        fieldRef:
+          fieldPath: status.podIP
+    - name: CHUTNEY_ADVERTISE_IP
+      value: "10.96.77.77"
+    - name: CHUTNEY_WAIT_SEED
+      value: "__CHUTNEY_WAIT_SEED__"
+    volumeMounts:
+    - { name: data, mountPath: /data }
+    readinessProbe:
+      exec:
+        command: ["./chutney", "verify", "networks/k8s-mini"]
+      initialDelaySeconds: 60
+      periodSeconds: 15
+      timeoutSeconds: 60
+      failureThreshold: 30
+    livenessProbe:
+      exec:
+        command: ["pgrep", "tor"]
+      initialDelaySeconds: 600
+      periodSeconds: 60
+      failureThreshold: 5
+    resources:
+      requests: { cpu: "750m", memory: "1.5Gi" }
+      limits:   { cpu: "1750m", memory: "3Gi" }
+  volumes:
+  - { name: data, emptyDir: {} }
