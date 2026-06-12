@@ -137,17 +137,18 @@ func publicInternetEgress(clusterPodCIDRs []string) netv1.NetworkPolicyEgressRul
 }
 
 // chutneyPodLabel is the label carried by the chutney Pod in every e2e
-// cluster (see chutneyManifest in test/e2e/chutney_test.go).
+// cluster (see hack/chutney/chutney.yaml).
 const chutneyPodLabel = "chutney"
 
-// Chutney k8s-mini port ranges used by the three directory authorities.
-// OR ports: 5000-5002 (circuit-building)
-// DirAuth ports: 7000-7002 (consensus / directory fetch)
+// Chutney k8s-mini port ranges used by the three directory authorities and
+// three relays (idx 0-5).
+// OR ports: 5000-5005 (circuit-building)
+// DirAuth ports: 7000-7005 (consensus / directory fetch)
 const (
 	chutneyORPortFirst  = int32(5000)
-	chutneyORPortLast   = int32(5002)
+	chutneyORPortLast   = int32(5005)
 	chutneyDirPortFirst = int32(7000)
-	chutneyDirPortLast  = int32(7002)
+	chutneyDirPortLast  = int32(7005)
 )
 
 // testingNetworkEgress restricts egress to the chutney pod (by PodSelector)

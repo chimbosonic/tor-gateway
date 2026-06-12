@@ -172,7 +172,7 @@ func TestBuildNetworkPolicy_TestingMode_PublicEgressAbsent(t *testing.T) {
 
 // TestTestingModeEgress_IsScopedToChutneyPodsAndPorts verifies the
 // testing-mode egress rule targets only chutney pods (by PodSelector) and
-// the known chutney port ranges (OR: 5000-5002, DirAuth: 7000-7002), not an
+// the known chutney port ranges (OR: 5000-5005, DirAuth: 7000-7005), not an
 // unrestricted namespace-wide allow.
 func TestTestingModeEgress_IsScopedToChutneyPodsAndPorts(t *testing.T) {
 	np, err := BuildNetworkPolicy(gwForNPTest(), nil, nil, "tor-gateway-chutney", testScheme(t))

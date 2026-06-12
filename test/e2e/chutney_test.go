@@ -35,11 +35,11 @@ import (
 
 // Resource names + namespace are intentionally fixed constants — there's
 // one chutney instance per kind cluster, owned by BeforeSuite.
+// These must match hack/chutney/chutney.yaml.
 const (
-	chutneyNamespace      = "tor-gateway-chutney"
-	chutneyPodName        = "chutney"
-	chutneyServiceName    = "chutney-network"
-	chutneyImage          = "ghcr.io/chimbosonic/tor-gateway-chutney:dev"
+	chutneyNamespace = "tor-gateway-chutney"
+	chutneyPodName   = "chutney"
+	chutneyImage     = "ghcr.io/chimbosonic/tor-gateway-chutney:dev"
 	chutneyConfigMapName  = "tor-gateway-testing-network"
 	chutneyConfigMapKey   = "fragment"
 	chutneyMountPath      = "/etc/tor-gateway/testing-network/fragment"
