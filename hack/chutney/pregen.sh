@@ -11,8 +11,9 @@ CLUSTER="${PREGEN_KIND_CLUSTER:-tor-gateway-pregen}"
 IMG="${CHUTNEY_IMG:-ghcr.io/chimbosonic/tor-gateway-chutney:dev}"
 NS=tor-gateway-chutney
 ATTEMPTS=3
-# Matches chutneyReadyTimeout in test/e2e/chutney_test.go: a fresh bootstrap
-# routinely needs >7min, so anything shorter burns attempts on healthy runs.
+# Generous single-attempt budget: a fresh bootstrap routinely needs >7min
+# under load, so anything shorter burns attempts on healthy runs. (The e2e
+# suite itself retries 3x7m fresh attempts — chutneyFreshBudget.)
 READY_TIMEOUT="${PREGEN_READY_TIMEOUT:-1080s}"
 OUT_DIR="${PREGEN_OUT_DIR:-.}"
 
