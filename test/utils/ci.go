@@ -25,14 +25,14 @@ import (
 // local runs). Workflow commands are parsed from any `run:` step's stdout,
 // which includes `go test` output.
 func CIWarning(format string, a ...any) {
-	fmt.Fprintf(os.Stdout, "::warning::"+format+"\n", a...)
+	_, _ = fmt.Fprintf(os.Stdout, "::warning::"+format+"\n", a...)
 }
 
 // StepSummary appends a line to the GitHub Actions step summary when
 // available; always echoes to stdout so local runs see it too.
 func StepSummary(format string, a ...any) {
 	line := fmt.Sprintf(format, a...)
-	fmt.Fprintln(os.Stdout, "[summary] "+line)
+	_, _ = fmt.Fprintln(os.Stdout, "[summary] "+line)
 	path := os.Getenv("GITHUB_STEP_SUMMARY")
 	if path == "" {
 		return
@@ -41,6 +41,6 @@ func StepSummary(format string, a ...any) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, _ = fmt.Fprintln(f, line)
 }
