@@ -298,11 +298,11 @@ var _ = Describe("OnionBalance HA — happy path", Ordered, Label("onionbalance"
 
 	It("routes by path to the correct backend over the master .onion", func() {
 		By("fetching / over Tor via onionbalance -> backend-A (circuit is warm from BeforeAll warmup)")
-		Eventually(fetchOverTor("ha-tor-client", "/"), "1m", "3s").
+		Eventually(fetchOverTor("ha-gw-tor-client", "/"), "1m", "3s").
 			Should(Equal("backend-A"), "/ should route to backend-A via the master .onion")
 
 		By("fetching /api over Tor via onionbalance -> backend-B")
-		Eventually(fetchOverTor("ha-tor-client", "/api"), "1m", "3s").
+		Eventually(fetchOverTor("ha-gw-tor-client", "/api"), "1m", "3s").
 			Should(Equal("backend-B"), "/api should route to backend-B via the master .onion")
 	})
 
