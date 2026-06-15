@@ -117,3 +117,35 @@ func TestCleanupModeAResources_DeletesAllChildren(t *testing.T) {
 		assertGone(t, "VanityJob", types.NamespacedName{Namespace: ns, Name: VanityRBACName(gw.Name)}, &batchv1.Job{})
 	})
 }
+
+// TestModeATransition_GCsCrossNSPairs verifies that reconciling a Gateway back
+// to Mode A (no OBP) cleans up cross-NS Role/RoleBinding left from Mode B.
+func TestModeATransition_GCsCrossNSPairs(t *testing.T) {
+	ctx := context.Background()
+	gw := sampleGateway()
+	crossLabels := map[string]string{
+		"app.kubernetes.io/managed-by": "tor-gateway",
+		"torgateway.io/owner-uid":      string(gw.UID),
+	}
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
+		Name: CrossNSMasterRoleName(gw), Namespace: testMasterSecretNS, Labels: crossLabels}}
+	rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{
+		Name: CrossNSMasterRoleName(gw), Namespace: testMasterSecretNS, Labels: crossLabels}}
+	sc := testSchemeWithGrants(t)
+	cl := fake.NewClientBuilder().
+		WithScheme(sc).WithRESTMapper(testRESTMapper()).
+		WithStatusSubresource(gw).WithObjects(gw, role, rb).Build()
+	r := &GatewayReconciler{Client: cl, Scheme: sc, Images: sampleImages()}
+
+	if err := r.cleanupModeBResources(ctx, gw); err != nil {
+		t.Fatalf("cleanupModeBResources: %v", err)
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Name: CrossNSMasterRoleName(gw), Namespace: testMasterSecretNS},
+		&rbacv1.Role{}); !apierrors.IsNotFound(err) {
+		t.Errorf("cross-NS Role should be GC'd on B→A transition; got %v", err)
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Name: CrossNSMasterRoleName(gw), Namespace: testMasterSecretNS},
+		&rbacv1.RoleBinding{}); !apierrors.IsNotFound(err) {
+		t.Errorf("cross-NS RoleBinding should be GC'd on B→A transition; got %v", err)
+	}
+}
