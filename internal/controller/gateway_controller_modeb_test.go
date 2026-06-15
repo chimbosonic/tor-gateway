@@ -28,8 +28,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
@@ -892,5 +894,81 @@ func TestModeBReconcile_PreservesSharedRouterRBAC(t *testing.T) {
 				t.Fatalf("router %s was deleted and recreated during Mode B reconcile (marker annotation lost)", name)
 			}
 		})
+	}
+}
+
+// TestReconcile_FinalizerCleansCrossNSOnDelete verifies the finalizer runs
+// cleanupModeBResources (GC'ing the cross-NS Role/RoleBinding that cannot carry
+// an owner ref) and then removes itself so the Gateway can be reaped.
+func TestReconcile_FinalizerCleansCrossNSOnDelete(t *testing.T) {
+	ctx := context.Background()
+	gc := &gwv1.GatewayClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "tor-gateway"}, // matches sampleGateway().Spec.GatewayClassName
+		Spec:       gwv1.GatewayClassSpec{ControllerName: ControllerName},
+	}
+	gw := sampleGateway()
+	gw.Finalizers = []string{FinalizerName}
+	crossLabels := map[string]string{
+		"app.kubernetes.io/managed-by": "tor-gateway",
+		"torgateway.io/owner-uid":      string(gw.UID),
+	}
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
+		Name: CrossNSMasterRoleName(gw), Namespace: testMasterSecretNS, Labels: crossLabels}}
+	rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{
+		Name: CrossNSMasterRoleName(gw), Namespace: testMasterSecretNS, Labels: crossLabels}}
+
+	sc := testSchemeWithGrants(t)
+	cl := fake.NewClientBuilder().
+		WithScheme(sc).WithRESTMapper(testRESTMapper()).
+		WithStatusSubresource(gw).WithObjects(gc, gw, role, rb).Build()
+	r := &GatewayReconciler{Client: cl, Scheme: sc, Images: sampleImages()}
+
+	if err := cl.Delete(ctx, gw); err != nil {
+		t.Fatalf("delete gateway: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if err := cl.Get(ctx, types.NamespacedName{Name: CrossNSMasterRoleName(gw), Namespace: testMasterSecretNS},
+		&rbacv1.Role{}); !apierrors.IsNotFound(err) {
+		t.Errorf("cross-NS Role should be GC'd; got %v", err)
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Name: CrossNSMasterRoleName(gw), Namespace: testMasterSecretNS},
+		&rbacv1.RoleBinding{}); !apierrors.IsNotFound(err) {
+		t.Errorf("cross-NS RoleBinding should be GC'd; got %v", err)
+	}
+	if err := cl.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace},
+		&gwv1.Gateway{}); !apierrors.IsNotFound(err) {
+		t.Errorf("Gateway should be gone after finalizer removal; got %v", err)
+	}
+}
+
+// TestReconcile_AddsFinalizerToManagedGateway verifies a live managed Gateway
+// gets the finalizer on first reconcile.
+func TestReconcile_AddsFinalizerToManagedGateway(t *testing.T) {
+	ctx := context.Background()
+	gc := &gwv1.GatewayClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "tor-gateway"},
+		Spec:       gwv1.GatewayClassSpec{ControllerName: ControllerName},
+	}
+	gw := sampleGateway()
+	sc := testSchemeWithGrants(t)
+	cl := fake.NewClientBuilder().
+		WithScheme(sc).WithRESTMapper(testRESTMapper()).
+		WithStatusSubresource(gw).WithObjects(gc, gw).Build()
+	r := &GatewayReconciler{Client: cl, Scheme: sc, Images: sampleImages()}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got gwv1.Gateway
+	if err := cl.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &got); err != nil {
+		t.Fatalf("get gateway: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(&got, FinalizerName) {
+		t.Errorf("expected finalizer %q; finalizers=%v", FinalizerName, got.Finalizers)
 	}
 }

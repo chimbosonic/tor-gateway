@@ -105,6 +105,40 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	// Finalizer: ensures cross-NS Role/RoleBinding (which cannot carry an owner
+	// ref) are GC'd before the Gateway object is removed. Added to every managed
+	// Gateway; cleanupModeBResources is a no-op for Mode A.
+	if !gw.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(gw, FinalizerName) {
+			if err := r.cleanupModeBResources(ctx, gw); err != nil {
+				return ctrl.Result{}, err
+			}
+			// Re-fetch + retry: cleanupModeBResources may have already issued a
+			// metadata Update, so the finalizer removal can race a concurrent
+			// reconcile. RetryOnConflict matches the rest of this file's style;
+			// cleanup is idempotent so a requeue is harmless either way.
+			if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				var fresh gwv1.Gateway
+				if err := r.Get(ctx, client.ObjectKeyFromObject(gw), &fresh); err != nil {
+					return err
+				}
+				if !controllerutil.ContainsFinalizer(&fresh, FinalizerName) {
+					return nil
+				}
+				controllerutil.RemoveFinalizer(&fresh, FinalizerName)
+				return r.Update(ctx, &fresh)
+			}); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+	if controllerutil.AddFinalizer(gw, FinalizerName) {
+		if err := r.Update(ctx, gw); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	obp, obpAccepted, err := r.findEffectiveOnionBalance(ctx, gw)
 	if err != nil {
 		return ctrl.Result{}, err
