@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
+	record "k8s.io/client-go/tools/record"
 
 	policyv1alpha1 "github.com/chimbosonic/tor-gateway/api/v1alpha1"
 	"github.com/chimbosonic/tor-gateway/internal/tor"
@@ -970,5 +971,40 @@ func TestReconcile_AddsFinalizerToManagedGateway(t *testing.T) {
 	}
 	if !controllerutil.ContainsFinalizer(&got, FinalizerName) {
 		t.Errorf("expected finalizer %q; finalizers=%v", FinalizerName, got.Finalizers)
+	}
+}
+
+// TestEnsureModeB_MasterSecretNotFoundSurfaces verifies a missing master Secret
+// sets Programmed=False/MasterSecretNotFound and does NOT return an error (which
+// would hot-loop the reconcile).
+func TestEnsureModeB_MasterSecretNotFoundSurfaces(t *testing.T) {
+	ctx := context.Background()
+	gw := sampleGateway()
+	obp := samplePolicy(1) // same-namespace master Secret ref, but Secret absent
+	sc := testSchemeWithGrants(t)
+	cl := fake.NewClientBuilder().
+		WithScheme(sc).WithRESTMapper(testRESTMapper()).
+		WithStatusSubresource(gw).WithObjects(gw, obp).Build()
+	rec := record.NewFakeRecorder(10)
+	r := &GatewayReconciler{Client: cl, Scheme: sc, Images: sampleImages(), Recorder: rec}
+
+	if err := r.ensureModeB(ctx, gw, obp); err != nil {
+		t.Fatalf("ensureModeB should not return an error for a missing master Secret; got %v", err)
+	}
+	var got gwv1.Gateway
+	if err := cl.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &got); err != nil {
+		t.Fatal(err)
+	}
+	prog := meta.FindStatusCondition(got.Status.Conditions, string(gwv1.GatewayConditionProgrammed))
+	if prog == nil || prog.Status != metav1.ConditionFalse || prog.Reason != ReasonMasterSecretNotFound {
+		t.Errorf("Programmed = %v, want False/%s", prog, ReasonMasterSecretNotFound)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "Warning") || !strings.Contains(ev, ReasonMasterSecretNotFound) {
+			t.Errorf("event = %q, want Warning/%s", ev, ReasonMasterSecretNotFound)
+		}
+	default:
+		t.Error("expected a Warning event for the missing master Secret")
 	}
 }

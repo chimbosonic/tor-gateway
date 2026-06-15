@@ -633,6 +633,10 @@ func (r *GatewayReconciler) ensureNetworkPolicy(
 	return err
 }
 
+// ReasonMasterSecretNotFound is the Programmed=False reason when the OBP's
+// master-key Secret is absent at provisioning time.
+const ReasonMasterSecretNotFound = "MasterSecretNotFound"
+
 // ensureModeB provisions all Mode B (onionbalance HA) resources for gw.
 func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, pol *policyv1alpha1.OnionBalancePolicy) error {
 	masterSecretNS := pol.Spec.MasterKeySecretRef.Namespace
@@ -648,6 +652,19 @@ func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, p
 
 	var masterSec corev1.Secret
 	if err := r.Get(ctx, client.ObjectKey{Namespace: masterSecretNS, Name: pol.Spec.MasterKeySecretRef.Name}, &masterSec); err != nil {
+		// NotFound is only reachable as a race (Secret deleted after the OBP was
+		// Accepted); the steady-state missing-Secret case is handled upstream by
+		// the PolicyNotAccepted branch. Surface + return nil rather than
+		// hot-looping: recovery is event-driven — a Secret change flips the OBP's
+		// Accepted condition (OBP controller watches Secrets), and the Gateway
+		// Watches OnionBalancePolicy, so the requeue fires reliably.
+		if apierrors.IsNotFound(err) {
+			r.event(gw, corev1.EventTypeWarning, ReasonMasterSecretNotFound,
+				fmt.Sprintf("master key Secret %s/%s not found; HA cannot be programmed until it exists",
+					masterSecretNS, pol.Spec.MasterKeySecretRef.Name))
+			return r.setProgrammingCondition(ctx, gw, ReasonMasterSecretNotFound,
+				fmt.Sprintf("master key Secret %s/%s not found", masterSecretNS, pol.Spec.MasterKeySecretRef.Name))
+		}
 		return fmt.Errorf("get master Secret: %w", err)
 	}
 	master, err := tor.MasterOnionFromSecret(masterSec.Data)
