@@ -25,9 +25,16 @@ import (
 	"github.com/chimbosonic/tor-gateway/internal/tor"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
+)
+
+const (
+	ReasonReloadConfigFailed = "OnionbalanceConfigRenderFailed"
+	ReasonReloadSighupFailed = "OnionbalanceReloadFailed"
 )
 
 // LabelGateway is the operator-applied label that selects backend Secrets
@@ -67,6 +74,10 @@ type RefresherConfig struct {
 	// --healthcheck flag reads to determine liveness. The refresher writes it
 	// after every successful rebuild. If empty, the write is skipped.
 	HealthcheckFile string
+	// Recorder, when non-nil, receives Warning events for the refresher's own
+	// internal failures (config render/write, SIGHUP), with the Gateway as the
+	// involved object. Best-effort: nil disables event emission.
+	Recorder record.EventRecorder
 }
 
 // Refresher watches backend Secrets for a Gateway and keeps the
@@ -181,15 +192,18 @@ func (r *Refresher) rebuild(_ context.Context, objs []any) {
 	rendered, err := Render(r.cfg.Master, backends, r.cfg.MasterKeyPath)
 	if err != nil {
 		slog.Error("onionbalance render failed", "err", err)
+		r.emitWarning(ReasonReloadConfigFailed, "onionbalance config render failed: "+err.Error())
 		return
 	}
 	if err := atomicWrite(r.cfg.ConfigPath, []byte(rendered)); err != nil {
 		slog.Error("onionbalance write failed", "path", r.cfg.ConfigPath, "err", err)
+		r.emitWarning(ReasonReloadConfigFailed, "onionbalance config write failed: "+err.Error())
 		return
 	}
 	if err := sighupPID(r.cfg.PIDFile); err != nil {
 		// Not fatal: on first run the daemon may not be up yet.
 		slog.Warn("onionbalance SIGHUP failed", "pid", r.cfg.PIDFile, "err", err)
+		r.emitWarning(ReasonReloadSighupFailed, "onionbalance SIGHUP failed: "+err.Error())
 		return
 	}
 	if r.cfg.HealthcheckFile != "" {
@@ -198,6 +212,20 @@ func (r *Refresher) rebuild(_ context.Context, objs []any) {
 		}
 	}
 	slog.Info("onionbalance config refreshed", "backends", len(backends))
+}
+
+func (r *Refresher) emitWarning(reason, msg string) {
+	if r.cfg.Recorder == nil {
+		return
+	}
+	gwRef := &corev1.ObjectReference{
+		APIVersion: "gateway.networking.k8s.io/v1",
+		Kind:       "Gateway",
+		Name:       r.cfg.GatewayName,
+		Namespace:  r.cfg.GatewayNamespace,
+		UID:        types.UID(r.cfg.OwnerUID),
+	}
+	r.cfg.Recorder.Event(gwRef, corev1.EventTypeWarning, reason, msg)
 }
 
 func backendsFromSecrets(objs []any, ownerUID string) []tor.OnionAddress {

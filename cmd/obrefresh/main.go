@@ -32,8 +32,12 @@ import (
 
 	"github.com/chimbosonic/tor-gateway/internal/onionbalance"
 	"github.com/chimbosonic/tor-gateway/internal/tor"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/record"
 )
 
 // healthcheckFile is the well-known path the refresher writes after each
@@ -114,6 +118,11 @@ func main() {
 		os.Exit(2)
 	}
 
+	broadcaster := record.NewBroadcaster()
+	broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: client.CoreV1().Events("")})
+	recorder := broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "obrefresh"})
+	defer broadcaster.Shutdown()
+
 	r, err := onionbalance.NewRefresher(ctx, onionbalance.RefresherConfig{
 		GatewayName:      gatewayName,
 		GatewayNamespace: gatewayNS,
@@ -125,6 +134,7 @@ func main() {
 		OwnerUID:         gatewayUID,
 		Client:           client,
 		HealthcheckFile:  healthcheckFile,
+		Recorder:         recorder,
 	})
 	if err != nil {
 		slog.Error("refresher init failed", "err", err)

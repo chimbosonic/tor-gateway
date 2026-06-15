@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/record"
 )
 
 func mustKeyPair(t *testing.T) *tor.KeyPair {
@@ -218,6 +219,41 @@ func TestBackendsFromSecrets_RequiresOwnerReference(t *testing.T) {
 	addrs := backendsFromSecrets([]any{s}, "abc-123")
 	if len(addrs) != 0 {
 		t.Errorf("expected 0 addrs (no controller ownerRef), got %d", len(addrs))
+	}
+}
+
+func TestRebuild_EmitsWarningOnWriteFailure(t *testing.T) {
+	rec := record.NewFakeRecorder(10)
+	dir := t.TempDir()
+	master := mustKeyPair(t).OnionAddress()
+	backend := backendSecret("blog-backend-0-keys", "prod", mustKeyPair(t).OnionAddress().String())
+
+	cfg := RefresherConfig{
+		GatewayName:      "blog",
+		GatewayNamespace: "prod",
+		MasterKeyPath:    filepath.Join(dir, "master_sk"),
+		// ConfigPath points into a nonexistent directory so atomicWrite's
+		// CreateTemp fails; Render succeeds first, isolating the write path.
+		ConfigPath: filepath.Join(dir, "does-not-exist", "config.yaml"),
+		PIDFile:    filepath.Join(dir, "ob.pid"),
+		Interval:   5 * time.Millisecond,
+		Master:     master,
+		OwnerUID:   testGatewayUID,
+		Client:     fake.NewClientset(),
+		Recorder:   rec,
+	}
+	r, err := NewRefresher(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.rebuild(context.Background(), []any{backend})
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "Warning") || !strings.Contains(ev, ReasonReloadConfigFailed) {
+			t.Errorf("event = %q, want Warning/%s", ev, ReasonReloadConfigFailed)
+		}
+	default:
+		t.Error("expected a Warning event on write failure")
 	}
 }
 

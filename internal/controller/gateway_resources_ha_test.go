@@ -29,6 +29,22 @@ import (
 	"github.com/chimbosonic/tor-gateway/internal/tor"
 )
 
+func TestBuildFrontendRole_AllowsEventCreate(t *testing.T) {
+	role, err := BuildFrontendRole(sampleGateway(), samplePolicy(2), testScheme(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, rule := range role.Rules {
+		if slices.Contains(rule.Resources, "events") && slices.Contains(rule.Verbs, "create") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("frontend Role must allow events:create; rules=%v", role.Rules)
+	}
+}
+
 func samplePolicy(replicas int32) *policyv1alpha1.OnionBalancePolicy {
 	return &policyv1alpha1.OnionBalancePolicy{
 		ObjectMeta: metav1.ObjectMeta{
@@ -504,11 +520,14 @@ func TestBuildFrontendRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(role.Rules) != 2 {
-		t.Fatalf("expected 2 rules, got %d", len(role.Rules))
+	if len(role.Rules) != 3 {
+		t.Fatalf("expected 3 rules, got %d", len(role.Rules))
 	}
 	var sawGet, sawListWatch bool
 	for _, r := range role.Rules {
+		if slices.Contains(r.Resources, "events") {
+			continue
+		}
 		if len(r.Resources) != 1 || r.Resources[0] != rbacResSecrets {
 			t.Errorf("expected only secrets; got %v", r.Resources)
 		}

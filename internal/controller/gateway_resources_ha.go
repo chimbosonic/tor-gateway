@@ -440,6 +440,11 @@ func BuildFrontendRole(gw *gwv1.Gateway, pol *policyv1alpha1.OnionBalancePolicy,
 				Resources: []string{"secrets"},
 				Verbs:     []string{"list", "watch"},
 			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"events"},
+				Verbs:     []string{"create", "patch"},
+			},
 		},
 	}
 	if err := controllerutil.SetControllerReference(gw, role, scheme); err != nil {
