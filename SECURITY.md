@@ -74,7 +74,10 @@ may name a Secret in a different namespace than the Gateway. A
 re-validated on every reconcile. The operator emits a per-Gateway `Role`
 and `RoleBinding` in the source namespace granting the frontend SA `get` on
 exactly the named Secret; old bindings are garbage-collected when the
-reference changes namespace.
+reference changes namespace. A Gateway finalizer (added in v0.5) ensures
+these cross-namespace Role and RoleBinding resources are reclaimed on Gateway
+deletion — deleting a Mode B Gateway no longer leaves orphaned RBAC objects
+in the master-Secret namespace.
 
 **PoW in Mode B.** The Tor PoW intro-point defenses cannot be enabled on
 onionbalance backend instances. The PoW challenge lives at the Tor protocol
