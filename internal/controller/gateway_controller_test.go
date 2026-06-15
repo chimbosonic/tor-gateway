@@ -358,6 +358,27 @@ var _ = Describe("Gateway reconciler", func() {
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: ServiceName(gw.Name), Namespace: ns}, &corev1.Service{})
 			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "Mode A Service should be deleted")
 
+			// Programmed now reflects real readiness: envtest has no kubelet,
+			// so mark the frontend Deployment Available and publish a backend
+			// hostname before re-reconciling so the condition can flip to True.
+			fe := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: FrontendName(gw), Namespace: ns}, fe)).To(Succeed())
+			fe.Status.Conditions = []appsv1.DeploymentCondition{
+				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue,
+					Reason: "MinimumReplicasAvailable", LastUpdateTime: metav1.Now(), LastTransitionTime: metav1.Now()},
+			}
+			Expect(k8sClient.Status().Update(ctx, fe)).To(Succeed())
+			// The backend StatefulSet's per-pod key Secret is created by the
+			// reconcile; publish a hostname onto it so it counts as ready.
+			readyBackend := &corev1.Secret{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: BackendKeySecretName(gw, 0), Namespace: ns}, readyBackend)).To(Succeed())
+			if readyBackend.Data == nil {
+				readyBackend.Data = map[string][]byte{}
+			}
+			readyBackend.Data["hostname"] = []byte("backend0example.onion")
+			Expect(k8sClient.Update(ctx, readyBackend)).To(Succeed())
+			reconcileGW(gw.Name, gw.Namespace)
+
 			// Status: addresses contain the master .onion.
 			out := &gwv1.Gateway{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, out)).To(Succeed())

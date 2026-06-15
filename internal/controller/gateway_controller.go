@@ -637,6 +637,13 @@ func (r *GatewayReconciler) ensureNetworkPolicy(
 // master-key Secret is absent at provisioning time.
 const ReasonMasterSecretNotFound = "MasterSecretNotFound"
 
+// ReasonFrontendNotReady / ReasonBackendsNotReady are the Programmed=False
+// reasons when Mode B resources are applied but not yet healthy.
+const (
+	ReasonFrontendNotReady = "FrontendNotReady"
+	ReasonBackendsNotReady = "BackendsNotReady"
+)
+
 // ensureModeB provisions all Mode B (onionbalance HA) resources for gw.
 func (r *GatewayReconciler) ensureModeB(ctx context.Context, gw *gwv1.Gateway, pol *policyv1alpha1.OnionBalancePolicy) error {
 	masterSecretNS := pol.Spec.MasterKeySecretRef.Namespace
@@ -980,6 +987,42 @@ const (
 	annTrue         = "true"
 )
 
+// modeBHealth reports reconcile-observable Mode B health: frontend Deployment
+// Available and at least one backend Secret carrying a hostname. It does NOT
+// verify Tor descriptor liveness (the manager cannot query HSDirs); that is
+// covered by the e2e/realtor smoke tests.
+func (r *GatewayReconciler) modeBHealth(ctx context.Context, gw *gwv1.Gateway) (healthy bool, reason, message string) {
+	var fe appsv1.Deployment
+	if err := r.Get(ctx, client.ObjectKey{Namespace: gw.Namespace, Name: FrontendName(gw)}, &fe); err != nil {
+		msg := "frontend Deployment not found yet"
+		if !apierrors.IsNotFound(err) {
+			msg = fmt.Sprintf("failed to get frontend Deployment: %v", err)
+		}
+		return false, ReasonFrontendNotReady, msg
+	}
+	available := false
+	for _, c := range fe.Status.Conditions {
+		if c.Type == appsv1.DeploymentAvailable && c.Status == corev1.ConditionTrue {
+			available = true
+			break
+		}
+	}
+	if !available {
+		return false, ReasonFrontendNotReady, "frontend Deployment not yet Available"
+	}
+	ready, err := countReadyBackends(ctx, r.Client, gw)
+	if err != nil {
+		return false, ReasonBackendsNotReady,
+			fmt.Sprintf("failed to list backend Secrets: %v", err)
+	}
+	if ready < 1 {
+		return false, ReasonBackendsNotReady, "0 backend instance(s) ready; need at least 1"
+	}
+	return true, string(gwv1.GatewayReasonProgrammed),
+		fmt.Sprintf("Mode B provisioned; frontend Available and %d backend(s) ready "+
+			"(reconcile-observable; Tor descriptor liveness not verified here)", ready)
+}
+
 func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gateway, master tor.OnionAddress, pol *policyv1alpha1.OnionBalancePolicy) error {
 	prev := previousOnion(gw)
 	if prev != "" && prev != master.String() {
@@ -1040,6 +1083,12 @@ func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gate
 		}
 	}
 
+	healthy, progReason, progMsg := r.modeBHealth(ctx, gw)
+	progStatus := metav1.ConditionFalse
+	if healthy {
+		progStatus = metav1.ConditionTrue
+	}
+
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var fresh gwv1.Gateway
 		if err := r.Get(ctx, client.ObjectKeyFromObject(gw), &fresh); err != nil {
@@ -1074,9 +1123,9 @@ func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gate
 			},
 			{
 				Type:               string(gwv1.GatewayConditionProgrammed),
-				Status:             metav1.ConditionTrue,
-				Reason:             string(gwv1.GatewayReasonProgrammed),
-				Message:            "Mode B (onionbalance HA) provisioned; master .onion published",
+				Status:             progStatus,
+				Reason:             progReason,
+				Message:            progMsg,
 				ObservedGeneration: fresh.Generation,
 				LastTransitionTime: metav1.Now(),
 			},

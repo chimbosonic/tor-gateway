@@ -741,11 +741,29 @@ func TestUpdateStatusModeB_RetriesOnConflict(t *testing.T) {
 
 	pol := samplePolicy(3)
 
+	// A ready frontend Deployment + backend Secret so modeBHealth reports
+	// healthy and Programmed stays True; this test is about retry, not health.
+	frontend := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: FrontendName(gw), Namespace: gw.Namespace},
+		Status: appsv1.DeploymentStatus{Conditions: []appsv1.DeploymentCondition{
+			{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue}}},
+	}
+	backend := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: BackendKeySecretName(gw, 0), Namespace: gw.Namespace,
+			Labels: map[string]string{
+				"torgateway.io/gateway":   gw.Name,
+				"torgateway.io/role":      "backend",
+				"torgateway.io/owner-uid": string(gw.UID),
+			}},
+		Data: map[string][]byte{"hostname": []byte("backend0example.onion")},
+	}
+
 	sc := testScheme(t)
 	inner := fake.NewClientBuilder().
 		WithScheme(sc).
 		WithStatusSubresource(gw).
-		WithObjects(gw, pol).
+		WithObjects(gw, pol, frontend, backend).
 		Build()
 	probe := &retryProbeClient{Client: inner}
 	r := &GatewayReconciler{Client: probe, Scheme: sc, Images: sampleImages()}
@@ -1006,5 +1024,79 @@ func TestEnsureModeB_MasterSecretNotFoundSurfaces(t *testing.T) {
 		}
 	default:
 		t.Error("expected a Warning event for the missing master Secret")
+	}
+}
+
+// TestUpdateStatusModeB_ProgrammedReflectsReadiness verifies Programmed is True
+// only when the frontend Deployment is Available AND at least one backend is
+// ready; otherwise False with a specific reason. The master .onion is always
+// published.
+func TestUpdateStatusModeB_ProgrammedReflectsReadiness(t *testing.T) {
+	ctx := context.Background()
+	kp, err := tor.GenerateKeyPair(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	master := kp.OnionAddress()
+
+	frontend := func(available bool) *appsv1.Deployment {
+		gw := sampleGateway()
+		st := corev1.ConditionFalse
+		if available {
+			st = corev1.ConditionTrue
+		}
+		return &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: FrontendName(gw), Namespace: gw.Namespace},
+			Status: appsv1.DeploymentStatus{Conditions: []appsv1.DeploymentCondition{
+				{Type: appsv1.DeploymentAvailable, Status: st}}},
+		}
+	}
+	readyBackend := func() *corev1.Secret {
+		gw := sampleGateway()
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: BackendKeySecretName(gw, 0), Namespace: gw.Namespace,
+				Labels: map[string]string{
+					"torgateway.io/gateway":   gw.Name,
+					"torgateway.io/role":      "backend",
+					"torgateway.io/owner-uid": string(gw.UID),
+				}},
+			Data: map[string][]byte{"hostname": []byte(master.String())},
+		}
+	}
+
+	tests := []struct {
+		name       string
+		extra      []client.Object
+		wantStatus metav1.ConditionStatus
+		wantReason string
+	}{
+		{"healthy", []client.Object{frontend(true), readyBackend()}, metav1.ConditionTrue, string(gwv1.GatewayReasonProgrammed)},
+		{"frontend not ready", []client.Object{frontend(false), readyBackend()}, metav1.ConditionFalse, ReasonFrontendNotReady},
+		{"backends not ready", []client.Object{frontend(true)}, metav1.ConditionFalse, ReasonBackendsNotReady},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := sampleGateway()
+			pol := samplePolicy(1)
+			sc := testScheme(t)
+			objs := append([]client.Object{gw, pol}, tc.extra...)
+			cl := fake.NewClientBuilder().WithScheme(sc).WithStatusSubresource(gw).WithObjects(objs...).Build()
+			r := &GatewayReconciler{Client: cl, Scheme: sc, Images: sampleImages()}
+			if err := r.updateStatusModeB(ctx, gw, master, pol); err != nil {
+				t.Fatalf("updateStatusModeB: %v", err)
+			}
+			var got gwv1.Gateway
+			if err := cl.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: gw.Namespace}, &got); err != nil {
+				t.Fatal(err)
+			}
+			prog := meta.FindStatusCondition(got.Status.Conditions, string(gwv1.GatewayConditionProgrammed))
+			if prog == nil || prog.Status != tc.wantStatus || prog.Reason != tc.wantReason {
+				t.Errorf("Programmed = %v, want %s/%s", prog, tc.wantStatus, tc.wantReason)
+			}
+			if len(got.Status.Addresses) == 0 || got.Status.Addresses[0].Value != master.String() {
+				t.Errorf("master .onion must be published regardless of readiness; got %v", got.Status.Addresses)
+			}
+		})
 	}
 }
