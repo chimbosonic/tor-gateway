@@ -4,8 +4,8 @@ description: |
   Kubernetes Gateway API conformant operator that exposes in-cluster Services
   as Tor v3 hidden services (.onion URLs).
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.5.0
+appVersion: "0.5.0"
 kubeVersion: ">= 1.30.0-0"
 home: https://github.com/chimbosonic/tor-gateway
 sources:
