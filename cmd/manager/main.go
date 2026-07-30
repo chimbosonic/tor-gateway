@@ -166,6 +166,7 @@ func main() {
 
 	var testingTorNetworkInclude string
 	if testingTorNetworkFile != "" {
+		// #nosec G304 -- path comes from an operator-supplied flag on this process
 		content, err := os.ReadFile(testingTorNetworkFile)
 		if err != nil {
 			setupLog.Error(err, "read --testing-tor-network-file", "path", testingTorNetworkFile)

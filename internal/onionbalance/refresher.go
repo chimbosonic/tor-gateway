@@ -308,6 +308,7 @@ func atomicWrite(path string, data []byte) error {
 }
 
 func sighupPID(pidfile string) error {
+	// #nosec G304 -- pidfile path is the one this process configured for tor
 	raw, err := os.ReadFile(pidfile)
 	if err != nil {
 		return err

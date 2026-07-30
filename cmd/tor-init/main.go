@@ -241,12 +241,14 @@ func writeObConfig(hsDir, addr string) error {
 }
 
 func copyFile(srcPath, dstPath string) error {
-	in, err := os.Open(srcPath) //nolint:gosec // source path is the well-known Secret mount controlled by the operator
+	// #nosec G304 -- source path is the well-known Secret mount controlled by the operator
+	in, err := os.Open(srcPath)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
 
+	// #nosec G304 -- destination is the HiddenServiceDir emptyDir owned by this pod
 	out, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err

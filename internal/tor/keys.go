@@ -33,6 +33,7 @@ import (
 // directly. Once we expand the seed, the seed itself is no longer needed.
 
 const (
+	// #nosec G101 -- fixed Tor on-disk key file header tag, not a credential
 	tagSecret = "== ed25519v1-secret: type0 =="
 	tagPublic = "== ed25519v1-public: type0 =="
 
@@ -48,6 +49,7 @@ const (
 // FileSecretKeyName, FilePublicKeyName, FileHostnameName are the canonical
 // file names Tor expects inside a HiddenServiceDir.
 const (
+	// #nosec G101 -- fixed Tor key file name, not a credential
 	FileSecretKeyName = "hs_ed25519_secret_key"
 	FilePublicKeyName = "hs_ed25519_public_key"
 	FileHostnameName  = "hostname"

@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1032,7 +1033,7 @@ func (r *GatewayReconciler) updateStatusModeB(ctx context.Context, gw *gwv1.Gate
 
 	annotationsChanged := false
 	prevReplicas, _ := strconv.Atoi(gw.Annotations[annLastReplicas])
-	if int32(prevReplicas) != pol.Spec.Replicas {
+	if prevReplicas != int(pol.Spec.Replicas) {
 		r.event(gw, corev1.EventTypeNormal, "BackendsRolling",
 			fmt.Sprintf("backend replicas changing %d→%d; up to ~15 min until clients see the new pool", prevReplicas, pol.Spec.Replicas))
 		if gw.Annotations == nil {
@@ -1501,21 +1502,15 @@ func requestsForTargets(ns string, refs []gwv1.LocalPolicyTargetReference) []rec
 }
 
 func equalGatewayAddresses(a, b []gwv1.GatewayStatusAddress) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i].Value != b[i].Value {
+	return slices.EqualFunc(a, b, func(x, y gwv1.GatewayStatusAddress) bool {
+		if x.Value != y.Value {
 			return false
 		}
-		if (a[i].Type == nil) != (b[i].Type == nil) {
+		if (x.Type == nil) != (y.Type == nil) {
 			return false
 		}
-		if a[i].Type != nil && *a[i].Type != *b[i].Type {
-			return false
-		}
-	}
-	return true
+		return x.Type == nil || *x.Type == *y.Type
+	})
 }
 
 func equalListenerStatus(a, b []gwv1.ListenerStatus) bool {

@@ -49,6 +49,7 @@ func readKeyFiles(workdir string) (map[string][]byte, error) {
 	}
 	out := make(map[string][]byte, len(keyFiles))
 	for _, f := range keyFiles {
+		// #nosec G304 -- dir is an .onion subdirectory of our own mkp224o workdir and f is from a fixed list
 		b, err := os.ReadFile(filepath.Join(dir, f))
 		if err != nil {
 			return nil, fmt.Errorf("vanity-finalize: read %s: %w", f, err)

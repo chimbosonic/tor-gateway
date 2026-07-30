@@ -55,3 +55,6 @@ release/
 # SBOMs pulled locally by hack/read-sbom.sh
 sbom-*.spdx.json
 /ginkgo-report.json
+
+# Security scan output
+/gosec.sarif

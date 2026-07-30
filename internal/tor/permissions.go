@@ -144,29 +144,40 @@ func IsPermissionError(err error) bool {
 // FixPermissions chmods every entry under hiddenServiceDir to match the
 // expected modes. Used by the init container shipped with each Tor pod
 // after mounting the key Secret.
+//
+// The walk is performed through an os.Root handle scoped to
+// hiddenServiceDir so that every chmod resolves inside that directory and
+// cannot be redirected by a symlink swapped in between walk and chmod
+// (TOCTOU).
 func FixPermissions(hiddenServiceDir string) error {
-	if err := os.Chmod(hiddenServiceDir, HiddenServiceDirMode); err != nil {
+	root, err := os.OpenRoot(hiddenServiceDir)
+	if err != nil {
+		return fmt.Errorf("tor: open HiddenServiceDir: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	if err := root.Chmod(".", HiddenServiceDirMode); err != nil {
 		return fmt.Errorf("tor: chmod HiddenServiceDir: %w", err)
 	}
-	return filepath.WalkDir(hiddenServiceDir, func(p string, d fs.DirEntry, walkErr error) error {
+	return fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if p == hiddenServiceDir {
+		if p == "." {
 			return nil
 		}
 		switch {
 		case d.IsDir() && d.Name() == "authorized_clients":
-			return os.Chmod(p, AuthorizedClientsDirMode)
-		case !d.IsDir() && filepath.Base(p) == FileSecretKeyName:
-			return os.Chmod(p, SecretKeyMode)
+			return root.Chmod(p, AuthorizedClientsDirMode)
+		case !d.IsDir() && d.Name() == FileSecretKeyName:
+			return root.Chmod(p, SecretKeyMode)
 		case !d.IsDir():
 			info, err := d.Info()
 			if err != nil {
 				return err
 			}
 			if info.Mode().Perm() & ^PublicKeyMaxMode != 0 {
-				return os.Chmod(p, info.Mode().Perm()&PublicKeyMaxMode)
+				return root.Chmod(p, info.Mode().Perm()&PublicKeyMaxMode)
 			}
 		}
 		return nil

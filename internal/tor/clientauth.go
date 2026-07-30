@@ -116,7 +116,8 @@ func LoadAuthorizedClientsFromDir(srcDir string) (map[string]string, error) {
 			// Skip non-regular entries (sockets, devices, sub-dirs).
 			continue
 		}
-		body, err := os.ReadFile(filepath.Join(srcDir, name)) //nolint:gosec // srcDir is the well-known mount path supplied by the operator
+		// #nosec G304 -- srcDir is the well-known mount path supplied by the operator
+		body, err := os.ReadFile(filepath.Join(srcDir, name))
 		if err != nil {
 			return nil, err
 		}

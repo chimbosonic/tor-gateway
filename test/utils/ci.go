@@ -37,7 +37,8 @@ func StepSummary(format string, a ...any) {
 	if path == "" {
 		return
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	// #nosec G304 -- path comes from the GITHUB_STEP_SUMMARY runner environment variable
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
