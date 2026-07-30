@@ -5,6 +5,33 @@ entries:
       artifacthub.io/category: networking
       artifacthub.io/license: Apache-2.0
     apiVersion: v2
+    appVersion: 0.5.1
+    created: "2026-07-30T13:29:37.593505284Z"
+    description: 'Kubernetes Gateway API conformant operator that exposes in-cluster
+      Services as Tor v3 hidden services (.onion URLs). '
+    digest: aa8039766a25c35e6c9127b664d0ce1eb7ef8a23aa8572b2ea8443068db4c8c3
+    home: https://github.com/chimbosonic/tor-gateway
+    keywords:
+    - tor
+    - onion
+    - gateway-api
+    - privacy
+    - hidden-service
+    kubeVersion: '>= 1.30.0-0'
+    maintainers:
+    - email: agl314@chimbosonic.com
+      name: chimbosonic
+    name: tor-gateway
+    sources:
+    - https://github.com/chimbosonic/tor-gateway
+    type: application
+    urls:
+    - https://github.com/chimbosonic/tor-gateway/releases/download/tor-gateway-0.5.1/tor-gateway-0.5.1.tgz
+    version: 0.5.1
+  - annotations:
+      artifacthub.io/category: networking
+      artifacthub.io/license: Apache-2.0
+    apiVersion: v2
     appVersion: 0.4.0
     created: "2026-06-15T12:52:12.232313342Z"
     description: 'Kubernetes Gateway API conformant operator that exposes in-cluster
@@ -244,4 +271,4 @@ entries:
     urls:
     - https://github.com/chimbosonic/tor-gateway/releases/download/tor-gateway-0.0.1-rc3/tor-gateway-0.0.1-rc3.tgz
     version: 0.0.1-rc3
-generated: "2026-06-15T12:52:12.232349326Z"
+generated: "2026-07-30T13:29:37.593544708Z"
