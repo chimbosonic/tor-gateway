@@ -4,10 +4,6 @@ A Kubernetes [Gateway API](https://gateway-api.sigs.k8s.io/) conformant operator
 
 Drop in a `Gateway` of class `tor-gateway` and one or more `HTTPRoute`s, and the operator provisions a Tor daemon, manages its ed25519 keys, and publishes the resulting `.onion` address in `Gateway.status.addresses`.
 
-## Status
-
-Alpha — `v0.4.0` is the current release: installable, with signed multi-arch images + chart (see [Quickstart](#quickstart) and [Verifying signatures](#verifying-signatures)). See [the design plan](./docs/PLAN.md) and [`SECURITY.md`](./SECURITY.md).
-
 ## Quickstart
 
 > Prerequisite: install the upstream Gateway API CRDs first (the chart ships
